@@ -3,9 +3,9 @@
 #################################################################################################
 
 # The version of calico/go-build and calico/base to use.
-GO_VERSION=1.25.5
+GO_VERSION=1.25.7
 LLVM_VERSION=18.1.8
-K8S_BUILD_VERSION=1.34.2
+K8S_BUILD_VERSION=1.34.4
 GO_BUILD_VER=$(GO_VERSION)-llvm$(LLVM_VERSION)-k8s$(K8S_BUILD_VERSION)
 CALICO_BASE_VER=ubi9-1764706938
 
