@@ -38,7 +38,13 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write
+      # GitHub App tokens (including the workflow GITHUB_TOKEN) require
+      # 'pull-requests: write' to comment on a PR, even though the API
+      # endpoint is /repos/.../issues/.../comments. 'issues: write' alone
+      # produces a 403 "Resource not accessible by integration" on the
+      # POST. The /issues URL path is shared with real issues, but the
+      # GitHub App permission is split by target type.
+      pull-requests: write
     steps:
       - name: Check backport labels and update comment
         uses: actions/github-script@v7
