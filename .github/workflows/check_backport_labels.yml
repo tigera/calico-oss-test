@@ -1,37 +1,16 @@
-# This workflow gates PR merges on an explicit backport decision:
-# 1. Maintain a single sticky comment on each PR that lists the
-#    `backport/release-vX.Y` labels derived from current release branches
-#    AND states whether the PR's labels currently satisfy the gate. The
-#    comment refreshes on every PR event (update-if-changed to avoid
-#    notification churn). If no PR event fires (idle PR across a release
-#    branch cut), the comment stays stale until the next event; the PR
-#    sidebar Labels picker remains authoritative.
-# 2. Fail the check unless the PR has either 'skip-releases-backport' or
-#    at least one 'backport/release-vX.Y' label. The gate decision is
-#    computed from live PR labels and is never masked by comment-write
-#    errors.
-#
-# This workflow does NOT create labels. sync_backport_labels.yml is the
-# single source of truth for the label set; missing labels are healed by
-# its 'create' webhook, its twice-daily schedule, or a manual
-# workflow_dispatch.
-#
-# Add this check to required status checks in branch protection to block
-# merge.
+# Gates PR merges on a backport decision. Reads release branches to render
+# a single sticky comment listing backport/release-vX.Y labels and the
+# pass/fail state. Fails unless the PR has skip-releases-backport or a
+# backport/release-vX.Y label. Label creation is handled by
+# sync_backport_labels.yml.
 
 name: Validate Backport Labels
-# pull_request_target (not pull_request): gives fork PRs a full-write
-# token so the sticky comment can render. Safe only because this workflow
-# never checks out the PR head or executes PR-controlled content — keep
-# it that way.
+# pull_request_target so fork PRs get a write token. Safe only because we
+# never check out the PR head or run PR-controlled content.
 on:
   pull_request_target:
     types: [opened, reopened, labeled, unlabeled, synchronize, ready_for_review]
 
-# Per-PR serialization. cancel-in-progress is false so a fast label toggle
-# does not kill an in-flight gate computation. Under rapid toggles GitHub
-# may coalesce queued events; the gate is still correct because it always
-# reads live labels at execution time.
 concurrency:
   group: backport-labels-${{ github.event.pull_request.number }}
   cancel-in-progress: false
@@ -42,12 +21,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      # GitHub App tokens (including the workflow GITHUB_TOKEN) require
-      # 'pull-requests: write' to comment on a PR, even though the API
-      # endpoint is /repos/.../issues/.../comments. 'issues: write' alone
-      # produces a 403 "Resource not accessible by integration" on the
-      # POST. The /issues URL path is shared with real issues, but the
-      # GitHub App permission is split by target type.
+      # PR comments need pull-requests:write, not issues:write — even
+      # though the API path is /repos/.../issues/.../comments.
       pull-requests: write
     steps:
       - name: Check backport labels and update comment
@@ -77,11 +52,7 @@ jobs:
               throw new Error(`unreachable: withRetry exited loop without returning (${label})`);
             }
 
-            // Derive expected backport labels from current release branches.
-            // listMatchingRefs returns any ref starting with the prefix;
-            // branchRe filters out shapes like release-v3.30-hotfix or
-            // release-v4. The label set itself is managed by
-            // sync_backport_labels.yml — this workflow only reads refs.
+            // Derive expected labels from refs; sync workflow owns the label set.
             const branchRe = /^release-v\d+\.\d+$/;
             const refs = await github.paginate(github.rest.git.listMatchingRefs, {
               owner, repo, ref: 'heads/release-v', per_page: 100,
@@ -92,7 +63,6 @@ jobs:
               .map(b => `backport/${b}`)
               .sort();
 
-            // Gate: read live PR labels.
             const backportRe = /^backport\/release-v\d+\.\d+$/;
             const liveLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
               owner, repo, issue_number: pr.number, per_page: 100,
@@ -102,7 +72,6 @@ jobs:
             const hasBackport = prLabels.some(n => backportRe.test(n));
             const gatePassed = hasNoBackport || hasBackport;
 
-            // Build the single sticky comment body.
             const marker = '<!-- backport-label-bot -->';
             const lines = [marker, '### Backport labels', ''];
             if (expectedLabels.length === 0) {
@@ -126,16 +95,11 @@ jobs:
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner, repo, issue_number: pr.number, per_page: 100,
               });
-              // Defensive sort: the Issues comments API does not formally
-              // document its ordering. Comment IDs are monotonic.
+              // Comment IDs are monotonic; the Issues API doesn't document order.
               comments.sort((a, b) => a.id - b.id);
               const matches = comments.filter(c => c.body && c.body.startsWith(marker));
 
-              // Delete extras FIRST so screen state is correct even if the
-              // run is killed before the update below. Concurrent runs are
-              // serialized by the workflow's per-PR concurrency group, so
-              // racing on the same PR shouldn't happen — but if it ever did,
-              // the dedupe + 404-tolerant update path below recovers.
+              // Delete extras before update so a killed run leaves a clean state.
               if (matches.length > 1) {
                 core.warning(`Found ${matches.length} bot comments; deleting ${matches.length - 1} extras.`);
                 for (const extra of matches.slice(1)) {
@@ -175,19 +139,13 @@ jobs:
                 }), 'createComment');
               }
             } catch (e) {
+              // Log method/URL to distinguish fork-token 403s from policy/rate-limit 403s.
               if (e.status === 403) {
-                // Could be a true read-only fork-PR token OR a different 403
-                // (org policy, secondary rate limit that didn't match the
-                // retry regex, etc.). Log the message + request URL so the
-                // distinction is visible in the run log without breaking
-                // the gate.
                 core.info(`Comment writes skipped (403 on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}). Gate result is unaffected.`);
               } else if (e.status === 404 || e.status === 409 || e.status === 429 ||
                          (e.status >= 500 && e.status < 600)) {
                 core.warning(`Comment-write API error (${e.status}) on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}. Gate result is unaffected.`);
               } else {
-                // Unknown error class — surface as an annotation so bugs are
-                // loud, but do not mask the gate decision computed above.
                 core.error(`Unexpected error in comment block (status=${e.status}) on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}\n${e.stack || ''}`);
               }
             }
