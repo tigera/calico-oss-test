@@ -1,22 +1,29 @@
 # Reconciles 'backport/release-vX.Y' labels with the set of 'release-vX.Y'
-# branches that currently exist in the repo.
+# branches that currently exist in the repo. This workflow is the single
+# source of truth for the backport-label set; check_backport_labels.yml
+# only reads release branches to render its PR comment and does not create
+# labels.
 #
 # Behavior: creates missing labels. Does NOT delete stale labels, so that
 # historic PRs keep their labels intact for audit purposes. If a release
 # branch is retired, archive its label manually.
 #
-# Triggers: on branch creation (covers new release cuts) and manual dispatch.
-# There is intentionally no scheduled run — label creation relies on the
-# 'create' webhook for new branches, with check_backport_labels.yml as a
-# PR-time safety net. Use workflow_dispatch to backfill if a 'create' event
-# is ever missed (e.g., Actions outage).
-#
-# Note: check_backport_labels.yml runs the same label-creation logic at PR
-# time. Keep both in sync (search for CHANGE-BOTH).
+# Three triggers:
+# 1. 'create' webhook — primary path. Fires when a branch is pushed; the
+#    job's `if:` filters to 'release-v*' so a label is created the moment
+#    a release branch is cut.
+# 2. 'schedule' (06:00 and 18:00 UTC) — automatic recovery. Heals missing
+#    labels if a 'create' event was ever lost (Actions outage, branch
+#    created via an API call that didn't fire 'create', etc.). Cheap:
+#    typically zero createLabel calls because nothing is missing.
+# 3. 'workflow_dispatch' — manual recovery. Any team member can force an
+#    immediate backfill instead of waiting for the next scheduled run.
 
 name: Sync Backport Labels
 on:
   create:
+  schedule:
+    - cron: '0 6,18 * * *'
   workflow_dispatch:
 
 # Single global key by design: serializes the branch-create event and any
@@ -54,12 +61,10 @@ jobs:
                                     e.status === 429 ||
                                     e.status === 408 ||
                                     typeof e.status === 'undefined' ||
-                                    e.code === 'ETIMEDOUT' ||
-                                    e.code === 'ECONNRESET' ||
                                     (e.status === 403 && /rate limit|secondary/i.test(e.message || ''));
                   if (!transient || attempt === maxAttempts) throw e;
                   const delayMs = 500 * Math.pow(2, attempt - 1);
-                  core.info(`Transient error on ${label} (status=${e.status}, code=${e.code}); retrying in ${delayMs}ms.`);
+                  core.info(`Transient error on ${label} (status=${e.status}); retrying in ${delayMs}ms.`);
                   await new Promise(r => setTimeout(r, delayMs));
                 }
               }
@@ -81,8 +86,6 @@ jobs:
             });
             const existing = new Set(labels.map(l => l.name));
 
-            // CHANGE-BOTH: label-creation constants are duplicated in
-            // check_backport_labels.yml. Keep them in sync.
             const labelColor = '0e8a16';
             const labelDescription = 'Cherry-pick this PR to the matching release branch.';
 
@@ -103,11 +106,13 @@ jobs:
                   /already[_ ]exists/i.test(e.message || '')
                 );
                 if (alreadyExists) {
-                  // Race with check_backport_labels.yml — label just created.
+                  // Race with another sync run (concurrent create + schedule
+                  // window) — label is already present, treat as success.
                 } else {
                   // Per-label resilience: surface but continue so one bad
-                  // label does not poison the rest. There is no scheduled
-                  // retry — operator must rerun via workflow_dispatch.
+                  // label does not poison the rest. The next scheduled run
+                  // will retry; operators can also force a retry via
+                  // workflow_dispatch.
                   core.warning(`Failed to create label ${labelName}: ${e.message}`);
                   failedCount++;
                 }
@@ -115,5 +120,5 @@ jobs:
             }
             core.info(`Release branches: ${releaseBranches.length}, labels created: ${createdCount}, failures: ${failedCount}.`);
             if (failedCount > 0) {
-              core.warning(`${failedCount} label(s) failed to create. There is no scheduled retry — rerun this workflow via workflow_dispatch to backfill.`);
+              core.warning(`${failedCount} label(s) failed to create. The next scheduled run will retry; use workflow_dispatch to retry immediately.`);
             }
