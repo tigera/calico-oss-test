@@ -20,26 +20,10 @@
 # merge.
 
 name: Validate Backport Labels
-# Uses pull_request_target (not pull_request) so the workflow's GITHUB_TOKEN
-# is NOT downgraded to read-only on fork PRs. With pull_request_target the
-# job runs in the context of the base branch (master) and gets master's
-# full-write token, which is what lets the sticky comment render on fork
-# PRs.
-#
-# This is only safe because this workflow:
-#   1. NEVER checks out the PR head (no `actions/checkout`).
-#   2. NEVER executes any code, scripts, or config supplied by the PR.
-#   3. Only calls the GitHub REST API via actions/github-script, with the
-#      script body coming from the base branch's copy of this file (which
-#      pull_request_target guarantees).
-#   4. Only reads PR-controlled data through API calls (labels, comments),
-#      never interpolates that data into a shell or executor.
-#
-# If a future change ever wants to checkout the PR, run linters/tests, or
-# read files from the PR's tree — STOP. Either revert this trigger to
-# pull_request, or split the workflow into a safe pull_request_target part
-# (this script) and a separate pull_request part for anything that touches
-# PR-controlled content.
+# pull_request_target (not pull_request): gives fork PRs a full-write
+# token so the sticky comment can render. Safe only because this workflow
+# never checks out the PR head or executes PR-controlled content — keep
+# it that way.
 on:
   pull_request_target:
     types: [opened, reopened, labeled, unlabeled, synchronize, ready_for_review]
