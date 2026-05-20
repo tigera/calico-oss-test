@@ -166,14 +166,19 @@ jobs:
               }
             } catch (e) {
               if (e.status === 403) {
-                core.info('Comment writes skipped (no write token, likely fork PR). Gate result is unaffected.');
+                // Could be a true read-only fork-PR token OR a different 403
+                // (org policy, secondary rate limit that didn't match the
+                // retry regex, etc.). Log the message + request URL so the
+                // distinction is visible in the run log without breaking
+                // the gate.
+                core.info(`Comment writes skipped (403 on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}). Gate result is unaffected.`);
               } else if (e.status === 404 || e.status === 409 || e.status === 429 ||
                          (e.status >= 500 && e.status < 600)) {
-                core.warning(`Comment-write API error (${e.status}): ${e.message}. Gate result is unaffected.`);
+                core.warning(`Comment-write API error (${e.status}) on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}. Gate result is unaffected.`);
               } else {
                 // Unknown error class — surface as an annotation so bugs are
                 // loud, but do not mask the gate decision computed above.
-                core.error(`Unexpected error in comment block: ${e.message}\n${e.stack || ''}`);
+                core.error(`Unexpected error in comment block (status=${e.status}) on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}\n${e.stack || ''}`);
               }
             }
 
