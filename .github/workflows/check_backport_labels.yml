@@ -20,8 +20,12 @@
 # merge.
 
 name: Validate Backport Labels
+# pull_request_target (not pull_request): gives fork PRs a full-write
+# token so the sticky comment can render. Safe only because this workflow
+# never checks out the PR head or executes PR-controlled content — keep
+# it that way.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, labeled, unlabeled, synchronize, ready_for_review]
 
 # Per-PR serialization. cancel-in-progress is false so a fast label toggle
