@@ -1,23 +1,10 @@
-# Reconciles 'backport/release-vX.Y' labels with the set of 'release-vX.Y'
-# branches that currently exist in the repo. This workflow is the single
-# source of truth for the backport-label set; check_backport_labels.yml
-# only reads release branches to render its PR comment and does not create
-# labels.
+# Single source of truth for backport/release-vX.Y labels. Creates missing
+# labels for current release branches; never deletes them (retired-release
+# labels stay for audit and must be archived manually).
 #
-# Behavior: creates missing labels. Does NOT delete stale labels, so that
-# historic PRs keep their labels intact for audit purposes. If a release
-# branch is retired, archive its label manually.
-#
-# Three triggers:
-# 1. 'create' webhook — primary path. Fires when a branch is pushed; the
-#    job's `if:` filters to 'release-v*' so a label is created the moment
-#    a release branch is cut.
-# 2. 'schedule' (06:00 and 18:00 UTC) — automatic recovery. Heals missing
-#    labels if a 'create' event was ever lost (Actions outage, branch
-#    created via an API call that didn't fire 'create', etc.). Cheap:
-#    typically zero createLabel calls because nothing is missing.
-# 3. 'workflow_dispatch' — manual recovery. Any team member can force an
-#    immediate backfill instead of waiting for the next scheduled run.
+# Triggers: 'create' (primary, on release-v* branch push), 'schedule' (twice
+# daily, auto-recovery for missed 'create' events), 'workflow_dispatch'
+# (manual recovery).
 
 name: Sync Backport Labels
 on:
@@ -26,17 +13,14 @@ on:
     - cron: '0 6,18 * * *'
   workflow_dispatch:
 
-# Single global key by design: serializes the branch-create event and any
-# manual dispatch. Concurrent branch creations (rare, but possible during a
-# release cut) queue rather than run in parallel.
+# Global lock so create + schedule + dispatch queue instead of racing.
 concurrency:
   group: sync-backport-labels
   cancel-in-progress: false
 
 jobs:
   sync:
-    # On 'create' events, only run for release-v* branch creations.
-    # Tags and topic branches do not affect the backport-label set.
+    # Tags and non-release branches don't affect the label set.
     if: github.event_name != 'create' || (github.event.ref_type == 'branch' && startsWith(github.event.ref, 'release-v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -71,9 +55,7 @@ jobs:
               throw new Error(`unreachable: withRetry exited loop without returning (${label})`);
             }
 
-            // listMatchingRefs returns any ref starting with the prefix;
-            // branchRe is the actual correctness guarantee, filtering out
-            // shapes like release-v3.30-hotfix or release-v4.
+            // branchRe filters out shapes like release-v3.30-hotfix or release-v4.
             const refs = await github.paginate(github.rest.git.listMatchingRefs, {
               owner, repo, ref: 'heads/release-v', per_page: 100,
             });
@@ -106,13 +88,9 @@ jobs:
                   /already[_ ]exists/i.test(e.message || '')
                 );
                 if (alreadyExists) {
-                  // Race with another sync run (concurrent create + schedule
-                  // window) — label is already present, treat as success.
+                  // Concurrent sync run beat us to it — treat as success.
                 } else {
-                  // Per-label resilience: surface but continue so one bad
-                  // label does not poison the rest. The next scheduled run
-                  // will retry; operators can also force a retry via
-                  // workflow_dispatch.
+                  // Surface and continue; the next scheduled run retries.
                   core.warning(`Failed to create label ${labelName}: ${e.message}`);
                   failedCount++;
                 }
