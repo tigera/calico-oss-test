@@ -9,7 +9,9 @@ name: Validate Backport Labels
 # never check out the PR head or run PR-controlled content.
 on:
   pull_request_target:
-    types: [opened, reopened, labeled, unlabeled, synchronize, ready_for_review]
+    # No `synchronize` — re-running on every PR push wastes API budget;
+    # neither labels nor release branches can change on a push.
+    types: [opened, reopened, labeled, unlabeled, ready_for_review]
 
 concurrency:
   group: backport-labels-${{ github.event.pull_request.number }}
@@ -31,6 +33,9 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
+            // Same-repo vs fork PR: fork PRs always get a read-only token,
+            // so 403s on writes are expected. Same-repo 403s are not.
+            const isFork = pr.head?.repo?.full_name !== `${owner}/${repo}`;
 
             async function withRetry(fn, label) {
               const maxAttempts = 3;
@@ -99,20 +104,9 @@ jobs:
               comments.sort((a, b) => a.id - b.id);
               const matches = comments.filter(c => c.body && c.body.startsWith(marker));
 
-              // Delete extras before update so a killed run leaves a clean state.
-              if (matches.length > 1) {
-                core.warning(`Found ${matches.length} bot comments; deleting ${matches.length - 1} extras.`);
-                for (const extra of matches.slice(1)) {
-                  try {
-                    await withRetry(() => github.rest.issues.deleteComment({
-                      owner, repo, comment_id: extra.id,
-                    }), 'deleteComment(dup)');
-                  } catch (e) {
-                    core.warning(`Could not delete extra bot comment ${extra.id}: ${e.message}`);
-                  }
-                }
-              }
-
+              // Update the oldest sticky FIRST, then delete extras. If the
+              // delete step fails mid-flight the PR has duplicate stickies
+              // (cosmetic), but never zero stickies.
               const oldest = matches[0];
               if (oldest) {
                 if (oldest.body === body) {
@@ -138,15 +132,33 @@ jobs:
                   owner, repo, issue_number: pr.number, body,
                 }), 'createComment');
               }
+
+              if (matches.length > 1) {
+                core.warning(`Found ${matches.length} bot comments; deleting ${matches.length - 1} extras.`);
+                for (const extra of matches.slice(1)) {
+                  try {
+                    await withRetry(() => github.rest.issues.deleteComment({
+                      owner, repo, comment_id: extra.id,
+                    }), 'deleteComment(dup)');
+                  } catch (e) {
+                    core.warning(`Could not delete extra bot comment ${extra.id}: ${e.message}`);
+                  }
+                }
+              }
             } catch (e) {
-              // Log method/URL to distinguish fork-token 403s from policy/rate-limit 403s.
-              if (e.status === 403) {
-                core.info(`Comment writes skipped (403 on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}). Gate result is unaffected.`);
+              const where = `${e.request?.method || '?'} ${e.request?.url || '?'}`;
+              if (e.status === 403 && isFork) {
+                // Expected on fork PRs (read-only token). Log at info.
+                core.info(`Comment writes skipped (403 on ${where}: ${e.message}). Gate result is unaffected.`);
+              } else if (e.status === 403) {
+                // Same-repo 403 is NOT expected — likely org policy or a
+                // narrowed token. Surface it.
+                core.warning(`Unexpected 403 on same-repo PR (${where}: ${e.message}). Gate result is unaffected.`);
               } else if (e.status === 404 || e.status === 409 || e.status === 429 ||
                          (e.status >= 500 && e.status < 600)) {
-                core.warning(`Comment-write API error (${e.status}) on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}. Gate result is unaffected.`);
+                core.warning(`Comment-write API error (${e.status}) on ${where}: ${e.message}. Gate result is unaffected.`);
               } else {
-                core.error(`Unexpected error in comment block (status=${e.status}) on ${e.request?.method || '?'} ${e.request?.url || '?'}: ${e.message}\n${e.stack || ''}`);
+                core.error(`Unexpected error in comment block (status=${e.status}) on ${where}: ${e.message}\n${e.stack || ''}`);
               }
             }
 
