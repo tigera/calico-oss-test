@@ -1,13 +1,11 @@
 # Single source of truth for backport/release-vX.Y labels. Creates missing
-# labels for current release branches; never deletes them (retired-release
-# labels stay for audit and must be archived manually).
+# labels for current release branches; never deletes them (archive retired
+# release labels manually).
 #
-# Triggers: 'create' (primary, on release-v* branch push), 'schedule' (twice
-# daily, auto-recovery for missed 'create' events), 'workflow_dispatch'
-# (manual recovery; also the recommended hook for release-cutting automation
-# — 'create' is suppressed for branches pushed using the default
-# GITHUB_TOKEN, so a workflow that cuts release branches should invoke this
-# workflow via workflow_dispatch right after).
+# Triggers: 'create' (primary), 'schedule' (twice daily, recovery for missed
+# creates), and 'workflow_dispatch' (manual; also the right hook for
+# release-cutting automation, since 'create' is suppressed for branches
+# pushed with the default GITHUB_TOKEN).
 
 name: Sync Backport Labels
 on:
@@ -86,12 +84,9 @@ jobs:
                 }), `createLabel(${labelName})`);
                 createdCount++;
               } catch (e) {
-                // 422 only happens here on name collision — color is a
-                // hardcoded valid hex and the name is derived from a
-                // branchRe-filtered ref. Treat 422 as the concurrent-run race.
-                if (e.status === 422) {
-                  // Concurrent sync run beat us to it — treat as success.
-                } else {
+                // 422 here = concurrent sync race (other 422 causes are
+                // ruled out: color is a hardcoded valid hex, name is filtered).
+                if (e.status !== 422) {
                   // Surface and continue; the next scheduled run retries.
                   core.warning(`Failed to create label ${labelName}: ${e.message}`);
                   failedCount++;
@@ -100,8 +95,7 @@ jobs:
             }
             core.info(`Release branches: ${releaseBranches.length}, labels created: ${createdCount}, failures: ${failedCount}.`);
             if (failedCount > 0) {
-              // Red run so partial syncs surface in the Actions tab. The
-              // next scheduled run will retry; use workflow_dispatch for
-              // an immediate retry.
+              // Red run so partial syncs surface; next scheduled run retries
+              // (or workflow_dispatch for an immediate retry).
               core.setFailed(`${failedCount} label(s) failed to create.`);
             }
