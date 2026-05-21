@@ -4,7 +4,10 @@
 #
 # Triggers: 'create' (primary, on release-v* branch push), 'schedule' (twice
 # daily, auto-recovery for missed 'create' events), 'workflow_dispatch'
-# (manual recovery).
+# (manual recovery; also the recommended hook for release-cutting automation
+# — 'create' is suppressed for branches pushed using the default
+# GITHUB_TOKEN, so a workflow that cuts release branches should invoke this
+# workflow via workflow_dispatch right after).
 
 name: Sync Backport Labels
 on:
@@ -83,11 +86,10 @@ jobs:
                 }), `createLabel(${labelName})`);
                 createdCount++;
               } catch (e) {
-                const alreadyExists = e.status === 422 && (
-                  e.response?.data?.errors?.some(err => err.code === 'already_exists') ||
-                  /already[_ ]exists/i.test(e.message || '')
-                );
-                if (alreadyExists) {
+                // 422 only happens here on name collision — color is a
+                // hardcoded valid hex and the name is derived from a
+                // branchRe-filtered ref. Treat 422 as the concurrent-run race.
+                if (e.status === 422) {
                   // Concurrent sync run beat us to it — treat as success.
                 } else {
                   // Surface and continue; the next scheduled run retries.
@@ -98,5 +100,8 @@ jobs:
             }
             core.info(`Release branches: ${releaseBranches.length}, labels created: ${createdCount}, failures: ${failedCount}.`);
             if (failedCount > 0) {
-              core.warning(`${failedCount} label(s) failed to create. The next scheduled run will retry; use workflow_dispatch to retry immediately.`);
+              // Red run so partial syncs surface in the Actions tab. The
+              // next scheduled run will retry; use workflow_dispatch for
+              // an immediate retry.
+              core.setFailed(`${failedCount} label(s) failed to create.`);
             }
