@@ -104,9 +104,8 @@ jobs:
               comments.sort((a, b) => a.id - b.id);
               const matches = comments.filter(c => c.body && c.body.startsWith(marker));
 
-              // Update the oldest sticky FIRST, then delete extras. If the
-              // delete step fails mid-flight the PR has duplicate stickies
-              // (cosmetic), but never zero stickies.
+              // Update first, then delete extras: a delete failure leaves
+              // duplicates (cosmetic) rather than zero stickies.
               const oldest = matches[0];
               if (oldest) {
                 if (oldest.body === body) {
@@ -151,8 +150,7 @@ jobs:
                 // Expected on fork PRs (read-only token). Log at info.
                 core.info(`Comment writes skipped (403 on ${where}: ${e.message}). Gate result is unaffected.`);
               } else if (e.status === 403) {
-                // Same-repo 403 is NOT expected — likely org policy or a
-                // narrowed token. Surface it.
+                // Same-repo 403 isn't expected — likely org policy or a narrowed token.
                 core.warning(`Unexpected 403 on same-repo PR (${where}: ${e.message}). Gate result is unaffected.`);
               } else if (e.status === 404 || e.status === 409 || e.status === 429 ||
                          (e.status >= 500 && e.status < 600)) {
