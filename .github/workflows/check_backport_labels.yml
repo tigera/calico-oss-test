@@ -33,9 +33,6 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
-            // Same-repo vs fork PR: fork PRs always get a read-only token,
-            // so 403s on writes are expected. Same-repo 403s are not.
-            const isFork = pr.head?.repo?.full_name !== `${owner}/${repo}`;
 
             async function withRetry(fn, label) {
               const maxAttempts = 3;
@@ -146,17 +143,15 @@ jobs:
               }
             } catch (e) {
               const where = `${e.request?.method || '?'} ${e.request?.url || '?'}`;
-              if (e.status === 403 && isFork) {
-                // Expected on fork PRs (read-only token). Log at info.
-                core.info(`Comment writes skipped (403 on ${where}: ${e.message}). Gate result is unaffected.`);
-              } else if (e.status === 403) {
-                // Same-repo 403 isn't expected — likely org policy or a narrowed token.
-                core.warning(`Unexpected 403 on same-repo PR (${where}: ${e.message}). Gate result is unaffected.`);
-              } else if (e.status === 404 || e.status === 409 || e.status === 429 ||
-                         (e.status >= 500 && e.status < 600)) {
-                core.warning(`Comment-write API error (${e.status}) on ${where}: ${e.message}. Gate result is unaffected.`);
+              if (typeof e.status === 'number') {
+                // Any HTTP error from a write. Gate is unaffected — it was
+                // computed before this block. With pull_request_target the
+                // token is always write-capable, so a 403 here is a real
+                // issue (org policy, narrowed token, secondary rate limit).
+                core.warning(`Comment-write API error ${e.status} on ${where}: ${e.message}. Gate result is unaffected.`);
               } else {
-                core.error(`Unexpected error in comment block (status=${e.status}) on ${where}: ${e.message}\n${e.stack || ''}`);
+                // No HTTP status: bug in our code or a non-HTTP failure.
+                core.error(`Unexpected error in comment block on ${where}: ${e.message}\n${e.stack || ''}`);
               }
             }
 
