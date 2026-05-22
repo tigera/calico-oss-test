@@ -143,16 +143,7 @@ jobs:
               }
             } catch (e) {
               const where = `${e.request?.method || '?'} ${e.request?.url || '?'}`;
-              if (typeof e.status === 'number') {
-                // Any HTTP error from a write. Gate is unaffected — it was
-                // computed before this block. With pull_request_target the
-                // token is always write-capable, so a 403 here is a real
-                // issue (org policy, narrowed token, secondary rate limit).
-                core.warning(`Comment-write API error ${e.status} on ${where}: ${e.message}. Gate result is unaffected.`);
-              } else {
-                // No HTTP status: bug in our code or a non-HTTP failure.
-                core.error(`Unexpected error in comment block on ${where}: ${e.message}\n${e.stack || ''}`);
-              }
+              core.error(`Comment-write error on ${where} (status=${e.status ?? 'none'}): ${e.message}. Gate result is unaffected.`);
             }
 
             core.info(`release branches: ${expectedLabels.length}, gate ${gatePassed ? 'passed' : 'failed'}.`);
