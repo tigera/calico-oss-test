@@ -1,0 +1,52 @@
+# Stage 2 of the backport-labels gate. Triggered by workflow_run when
+# "Backport Labels (trigger)" completes. Runs from the base branch (trusted
+# workflow file) with issues:write and checks:write so it can create
+# missing backport labels and post the required-status check_run on the
+# PR head SHA.
+#
+# Trust model: stage 1 may execute fork-modified code from the PR head, but
+# it holds no token writes and no secrets. Stage 2 derives PR identity from
+# GitHub-set workflow_run metadata (head_sha, head_branch,
+# head_repository.owner.login), never from artifact content, so a fork
+# cannot trick stage 2 into acting on a different PR.
+#
+# Branch protection should require the "validate-backport-labels" check
+# (the name posted by checks.create below), not the workflow itself.
+
+name: Backport Labels
+on:
+  workflow_run:
+    workflows: ["Backport Labels (trigger)"]
+    types: [completed]
+
+concurrency:
+  # Key on (fork owner, branch) so all events for the same PR coalesce,
+  # including across force-pushes that change head_sha. Combined with the
+  # SHA-drift guard in the script, this means the latest run always wins.
+  group: backport-labels-${{ github.event.workflow_run.head_repository.owner.login }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+      checks: write
+    steps:
+      # workflow_run runs in the context of the base branch, so checkout
+      # without a `ref:` arg gets the default branch's trusted tree, not the
+      # fork PR's. persist-credentials:false drops the git token after this
+      # step (we only need it to read the .js file).
+      - name: Checkout workflow scripts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Validate labels and update PR
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const fn = require(`${process.env.GITHUB_WORKSPACE}/.github/workflows/scripts/backport_labels.js`);
+            await fn({ github, context, core });
