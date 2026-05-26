@@ -125,7 +125,61 @@ module.exports = async ({ github, context, core }) => {
     core.info(`Missing decision. Add: skip-releases-backport or one of: ${expectedLabels.join(', ')}`);
   }
 
-  // Step 4: Post commit status for branch protection
+  // Job summary shown on the workflow run page so reviewers/authors do not
+  // have to expand the step log to see the gate state and available labels.
+  await core.summary
+    .addHeading('Backport Labels Gate', 2)
+    .addRaw(`**Result:** ${gatePassed ? 'PASSED' : 'FAILED'}`)
+    .addBreak()
+    .addRaw(`**PR:** [#${pr.number}](${pr.html_url})`)
+    .addBreak()
+    .addRaw(`**Head SHA:** \`${pr.head.sha.slice(0, 10)}\``)
+    .addHeading('PR labels', 3)
+    .addList(prLabels.length === 0 ? ['(none)'] : prLabels)
+    .addHeading('Live backport labels (6-month window)', 3)
+    .addList(expectedLabels)
+    .addRaw(
+      gatePassed
+        ? '_PR carries a valid backport decision label._'
+        : '_Add `skip-releases-backport` or one of the live backport labels above to pass the gate._'
+    )
+    .write();
+
+  // Step 4: One-time info comment listing the live backport labels.
+  // Posted exactly once per PR; we do NOT update it on label changes (the
+  // commit status and job summary carry the live state).
+  try {
+    const infoMarker = '<!-- backport-label-bot:info -->';
+    const comments = await github.paginate(github.rest.issues.listComments, {
+      owner, repo, issue_number: pr.number,
+    });
+    const alreadyPosted = comments.some(c =>
+      c.user && c.user.login === 'github-actions[bot]' &&
+      c.body && c.body.startsWith(infoMarker)
+    );
+    if (!alreadyPosted) {
+      const labelLines = expectedLabels.map(n => `  - \`${n}\``).join('\n');
+      const body = `${infoMarker}
+### Backport labels for this PR
+
+This PR is gated by the \`validate-backport-labels\` check. To satisfy it, add one of:
+
+- **\`skip-releases-backport\`** if no backport is needed
+- One of the live release backport labels (commit in the last 6 months):
+${labelLines}
+
+_This comment is posted once when the PR opens. The current gate state lives on the \`validate-backport-labels\` check below, not here._
+`;
+      await withRetry(() => github.rest.issues.createComment({
+        owner, repo, issue_number: pr.number, body,
+      }), 'createComment');
+      core.info('Posted one-time info comment.');
+    }
+  } catch (e) {
+    core.warning(`Could not post info comment: ${e.message}`);
+  }
+
+  // Step 5: Post commit status for branch protection
   // Branch protection's merge widget reads commit statuses, not check_runs,
   // so we post a status here. Status description is capped at 140 chars by
   // GitHub; the target_url points at this run's log for full detail.
