@@ -116,30 +116,36 @@ module.exports = async ({ github, context, core }) => {
   const hasBackport = prLabels.some(n => backportRe.test(n));
   const gatePassed = hasNoBackport || hasBackport;
 
-  // Job summary so the gate result and labels show up directly on the
-  // workflow run page (markdown renders here, unlike step logs).
+  // Job summary on the workflow run page.
+  const labelLines = expectedLabels.map(n => `- ${n}`).join('\n');
+  const prLabelLines = prLabels.length === 0 ? '- (none)' : prLabels.map(n => `- ${n}`).join('\n');
+  const body = gatePassed
+    ? `Result: PASSED
+
+This PR has a recorded backport decision and can be merged.
+
+Current backport labels on this PR:
+
+${prLabelLines}
+`
+    : `Result: FAILED
+
+This PR cannot be merged yet because it is missing a backport decision.
+
+Backport labels are used to indicate whether this PR should be included in active release branches.
+
+Before merging, please add one of the following:
+
+- One or more backport/release-vX.Y labels if this PR should be cherry-picked to specific release branches.
+- The skip-releases-backport label if this PR does not need a backport, for example docs-only or test-only changes.
+
+Available active release backport labels:
+
+${labelLines}
+`;
   await core.summary
     .addHeading('Backport Labels Gate', 2)
-    .addRaw(
-      gatePassed
-        ? '**Result:** PASSED, backport decision recorded.'
-        : '**Result:** FAILED, backport decision missing.'
-    )
-    .addBreak()
-    .addRaw(
-      'Each `backport/release-vX.Y` label on this PR signals the release ' +
-      'process to cherry-pick the merged commit onto that release branch. ' +
-      'Apply `skip-releases-backport` when no backport is needed.'
-    )
-    .addHeading('PR labels', 3)
-    .addList(prLabels.length === 0 ? ['(none)'] : prLabels)
-    .addHeading('Live backport labels', 3)
-    .addList(expectedLabels)
-    .addRaw(
-      gatePassed
-        ? ''
-        : '\n_Add `skip-releases-backport` or one of the live backport labels above to pass the gate._'
-    )
+    .addRaw(body)
     .write();
 
   // Step 4: One-time info comment listing the live backport labels.
@@ -155,17 +161,20 @@ module.exports = async ({ github, context, core }) => {
       c.body && c.body.startsWith(infoMarker)
     );
     if (!alreadyPosted) {
-      const labelLines = expectedLabels.map(n => `  - **\`${n}\`**`).join('\n');
+      const labelLines = expectedLabels.map(n => `- ${n}`).join('\n');
       const body = `${infoMarker}
 ### Backport labels for this PR
 
-This PR is gated by the \`validate-backport-labels\` check. To satisfy it, add one of:
+Before merging this PR, you should add one of the following labels:
 
-- **\`skip-releases-backport\`** if no backport is needed
-- One of the live release backport labels:
+- One or more backport/release-vX.Y labels if this PR should be cherry-picked to specific release branches.
+- The skip-releases-backport label if this PR does not need a backport, for example docs-only or test-only changes.
+
+Available active release backport labels:
+
 ${labelLines}
 
-_This comment is posted once when the PR opens. The current gate state lives on the \`validate-backport-labels\` check below, not here._
+_This comment is posted once when the PR opens. The current gate state lives on the validate-backport-labels check below, not here._
 `;
       await withRetry(() => github.rest.issues.createComment({
         owner, repo, issue_number: pr.number, body,
