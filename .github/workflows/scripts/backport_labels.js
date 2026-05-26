@@ -120,7 +120,11 @@ module.exports = async ({ github, context, core }) => {
   // workflow run page (markdown renders here, unlike step logs).
   await core.summary
     .addHeading('Backport Labels Gate', 2)
-    .addRaw(`**Result:** ${gatePassed ? 'PASSED' : 'FAILED'}`)
+    .addRaw(
+      gatePassed
+        ? '**Result:** PASSED, backport decision recorded.'
+        : '**Result:** FAILED, backport decision missing.'
+    )
     .addBreak()
     .addRaw(
       'Each `backport/release-vX.Y` label on this PR signals the release ' +
