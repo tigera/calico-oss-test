@@ -158,14 +158,14 @@ module.exports = async ({ github, context, core }) => {
       c.body && c.body.startsWith(infoMarker)
     );
     if (!alreadyPosted) {
-      const labelLines = expectedLabels.map(n => `  - \`${n}\``).join('\n');
+      const labelLines = expectedLabels.map(n => `  - **\`${n}\`**`).join('\n');
       const body = `${infoMarker}
 ### Backport labels for this PR
 
 This PR is gated by the \`validate-backport-labels\` check. To satisfy it, add one of:
 
 - **\`skip-releases-backport\`** if no backport is needed
-- One of the live release backport labels (commit in the last 6 months):
+- One of the live release backport labels:
 ${labelLines}
 
 _This comment is posted once when the PR opens. The current gate state lives on the \`validate-backport-labels\` check below, not here._
