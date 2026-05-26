@@ -130,6 +130,22 @@ module.exports = async ({ github, context, core }) => {
   }
   core.info('============================');
 
+  // Job summary so the gate result and labels show up directly on the
+  // workflow run page (markdown renders here, unlike step logs).
+  await core.summary
+    .addHeading('Backport Labels Gate', 2)
+    .addRaw(`**Result:** ${gatePassed ? 'PASSED' : 'FAILED'}`)
+    .addHeading('PR labels', 3)
+    .addList(prLabels.length === 0 ? ['(none)'] : prLabels)
+    .addHeading('Live backport labels', 3)
+    .addList(expectedLabels)
+    .addRaw(
+      gatePassed
+        ? ''
+        : '\n_Add `skip-releases-backport` or one of the live backport labels above to pass the gate._'
+    )
+    .write();
+
   // Step 4: One-time info comment listing the live backport labels.
   // Posted exactly once per PR; we do NOT update it on label changes (the
   // commit status is the source of truth for the live state).
