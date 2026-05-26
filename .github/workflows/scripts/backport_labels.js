@@ -161,14 +161,14 @@ ${labelLines}
       c.body && c.body.startsWith(infoMarker)
     );
     if (!alreadyPosted) {
-      const labelLines = expectedLabels.map(n => `- ${n}`).join('\n');
+      const labelLines = expectedLabels.map(n => `- **\`${n}\`**`).join('\n');
       const body = `${infoMarker}
 ### Backport labels for this PR
 
 Before merging this PR, you should add one of the following labels:
 
-- One or more backport/release-vX.Y labels if this PR should be cherry-picked to specific release branches.
-- The skip-releases-backport label if this PR does not need a backport, for example docs-only or test-only changes.
+- One or more **\`backport/release-vX.Y\`** labels if this PR should be cherry-picked to specific release branches.
+- The **\`skip-releases-backport\`** label if this PR does not need a backport, for example docs-only or test-only changes.
 
 Available active release backport labels:
 
