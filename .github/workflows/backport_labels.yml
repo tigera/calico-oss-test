@@ -1,16 +1,16 @@
 # Stage 2 of the backport-labels gate. Triggered by workflow_run when
 # "Backport Labels (trigger)" completes. Runs from the base branch (trusted
-# workflow file) with issues:write and checks:write so it can create
-# missing backport labels and post the required-status check_run on the
-# PR head SHA.
+# workflow file) with issues:write and statuses:write so it can create
+# missing backport labels and post the required commit status on the PR
+# head SHA.
 #
 # Trust model: stage 1 may execute fork-modified code from the PR head, but
 # it holds no token writes and no secrets. Stage 2 derives PR identity from
 # GitHub-set workflow_run.head_sha, never from artifact content, so a fork
 # cannot trick stage 2 into acting on a different PR.
 #
-# Branch protection should require the "validate-backport-labels" check
-# (the name posted by checks.create below), not the workflow itself.
+# Branch protection should require the "validate-backport-labels" status
+# context, not the workflow itself.
 
 name: Backport Labels
 on:
@@ -33,7 +33,7 @@ jobs:
       contents: read
       pull-requests: read
       issues: write
-      checks: write
+      statuses: write
     steps:
       # workflow_run runs in the context of the base branch, so checkout
       # without a `ref:` arg gets the default branch's trusted tree, not the

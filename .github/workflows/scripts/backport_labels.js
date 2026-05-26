@@ -125,37 +125,21 @@ module.exports = async ({ github, context, core }) => {
     core.info(`Missing decision. Add: skip-releases-backport or one of: ${expectedLabels.join(', ')}`);
   }
 
-  // Step 4: Post check_run for branch protection
-  const inline = expectedLabels.map(n => `\`${n}\``).join(', ');
-  const conclusion = gatePassed ? 'success' : 'failure';
-  const checkTitle = gatePassed
-    ? 'Backport decision recorded'
-    : 'Backport decision missing';
-  const checkSummary = gatePassed
-    ? 'PR carries a valid backport decision label.'
-    : `Add \`skip-releases-backport\` or one of the live backport labels. Available: ${inline}.`;
-  const checkName = 'validate-backport-labels';
-  const checkOutput = { title: checkTitle, summary: checkSummary };
-  try {
-    const existing = await withRetry(() => github.rest.checks.listForRef({
-      owner, repo,
-      ref: pr.head.sha,
-      check_name: checkName,
-    }), 'checks.listForRef');
-    const latest = existing.data.check_runs[0];
-    const result = { status: 'completed', conclusion, output: checkOutput };
-    if (latest) {
-      await withRetry(() => github.rest.checks.update({
-        owner, repo, check_run_id: latest.id, ...result,
-      }), 'checks.update');
-    } else {
-      await withRetry(() => github.rest.checks.create({
-        owner, repo, name: checkName, head_sha: pr.head.sha, ...result,
-      }), 'checks.create');
-    }
-  } catch (e) {
-    core.error(`Failed to post check_run: ${e.message}`);
-  }
+  // Step 4: Post commit status for branch protection
+  // Branch protection's merge widget reads commit statuses, not check_runs,
+  // so we post a status here. Status description is capped at 140 chars by
+  // GitHub; the target_url points at this run's log for full detail.
+  const description = gatePassed
+    ? 'Backport decision recorded.'
+    : 'Backport decision missing. See details for the live label list.';
+  await withRetry(() => github.rest.repos.createCommitStatus({
+    owner, repo,
+    sha: pr.head.sha,
+    state: gatePassed ? 'success' : 'failure',
+    context: 'validate-backport-labels',
+    description,
+    target_url: `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+  }), 'createCommitStatus');
 
   core.info(`PR #${pr.number}: live branches=${expectedLabels.length}, gate ${gatePassed ? 'passed' : 'failed'}.`);
 };
