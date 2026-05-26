@@ -1,19 +1,44 @@
-# Stage 1 of the backport-labels gate. Runs on PR events with no token
-# writes and no secrets. A malicious fork modifying this file in its branch
-# has nothing useful to attack. Sole purpose: fire a workflow_run event so
-# the trusted stage 2 (backport_labels.yml) can do the real work from the
-# base branch with the privileged token.
+# Stage 1 of the backport-labels gate. Runs on PR events and does two things:
+#   1. Posts a `pending` commit status for validate-backport-labels so the
+#      merge widget visibly flips to "in progress" the moment a label changes,
+#      closing the race where a stale success status would otherwise allow a
+#      merge before stage 2 reports the new result.
+#   2. Fires the workflow_run event that triggers stage 2 (backport_labels.yml)
+#      which runs from the base branch with the privileged token and posts the
+#      final success/failure status.
+#
+# Trust model: this workflow uses the PR head's workflow file, so a malicious
+# fork can modify it. For fork PRs, GitHub forces the token to read-only no
+# matter what we declare here, so the curl below silently fails and the gate
+# is still owned by stage 2 (which runs from the trusted base branch). For
+# same-repo PRs the curl posts the pending status; a same-repo contributor
+# could only abuse it by also bypassing code review, which they could do
+# anyway given their write access.
 
 name: Backport Labels (trigger)
 on:
   pull_request:
     types: [opened, reopened, labeled, unlabeled, ready_for_review, synchronize]
 
-permissions: {}
+permissions:
+  statuses: write
 
 jobs:
   trigger:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
+      - name: Mark gate pending
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPO/statuses/$PR_SHA" \
+            -d '{"state":"pending","context":"validate-backport-labels","description":"Re-evaluating backport-labels gate..."}'
       - run: echo "Triggers Backport Labels via workflow_run."
