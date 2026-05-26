@@ -49,9 +49,12 @@ module.exports = async ({ github, context, core }) => {
   const backportRe = /^backport\/release-v\d+\.\d+$/;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 180);
+  // GraphQL refPrefix must end in '/', so we narrow with the query
+  // parameter (substring match on ref name) and rely on branchRe below
+  // to reject ref names like release-v3.30-cherry-pick-9.
   const refsQuery = `query($owner: String!, $repo: String!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
-      refs(refPrefix: "refs/heads/release-v", first: 100, after: $cursor) {
+      refs(refPrefix: "refs/heads/", query: "release-v", first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
           name
