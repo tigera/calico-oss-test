@@ -125,6 +125,26 @@ module.exports = async ({ github, context, core }) => {
     core.info(`Missing decision. Add: skip-releases-backport or one of: ${expectedLabels.join(', ')}`);
   }
 
+  // Job summary shown on the workflow run page so reviewers/authors do not
+  // have to expand the step log to see the gate state and available labels.
+  await core.summary
+    .addHeading('Backport Labels Gate', 2)
+    .addRaw(`**Result:** ${gatePassed ? 'PASSED' : 'FAILED'}`)
+    .addBreak()
+    .addRaw(`**PR:** [#${pr.number}](${pr.html_url})`)
+    .addBreak()
+    .addRaw(`**Head SHA:** \`${pr.head.sha.slice(0, 10)}\``)
+    .addHeading('PR labels', 3)
+    .addList(prLabels.length === 0 ? ['(none)'] : prLabels)
+    .addHeading('Live backport labels (6-month window)', 3)
+    .addList(expectedLabels)
+    .addRaw(
+      gatePassed
+        ? '_PR carries a valid backport decision label._'
+        : '_Add `skip-releases-backport` or one of the live backport labels above to pass the gate._'
+    )
+    .write();
+
   // Step 4: Post commit status for branch protection
   // Branch protection's merge widget reads commit statuses, not check_runs,
   // so we post a status here. Status description is capped at 140 chars by
