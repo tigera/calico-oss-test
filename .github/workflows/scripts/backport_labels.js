@@ -117,17 +117,22 @@ module.exports = async ({ github, context, core }) => {
   const gatePassed = hasNoBackport || hasBackport;
 
   // Log the gate state to the action log. The PR author reaches it by
-  // clicking "Details" on the validate-backport-labels check.
-  core.info(`Live backport labels: ${expectedLabels.join(', ')}`);
-  core.info(`PR labels: ${prLabels.length === 0 ? '(none)' : prLabels.join(', ')}`);
-  core.info(`Gate: ${gatePassed ? 'PASSED' : 'FAILED'}`);
+  // clicking "Details" on the validate-backport-labels check. Plain text
+  // only; GitHub does not render markdown in action logs.
+  core.info('=== Backport Labels Gate ===');
+  core.info(`PR:                    #${pr.number} (${pr.html_url})`);
+  core.info(`Head SHA:              ${pr.head.sha}`);
+  core.info(`PR labels:             ${prLabels.length === 0 ? '(none)' : prLabels.join(', ')}`);
+  core.info(`Live backport labels:  ${expectedLabels.join(', ')}`);
+  core.info(`Gate:                  ${gatePassed ? 'PASSED' : 'FAILED'}`);
   if (!gatePassed) {
-    core.info(`Missing decision. Add: skip-releases-backport or one of: ${expectedLabels.join(', ')}`);
+    core.info(`Action needed:         add skip-releases-backport or one of: ${expectedLabels.join(', ')}`);
   }
+  core.info('============================');
 
   // Step 4: One-time info comment listing the live backport labels.
   // Posted exactly once per PR; we do NOT update it on label changes (the
-  // commit status and job summary carry the live state).
+  // commit status is the source of truth for the live state).
   try {
     const infoMarker = '<!-- backport-label-bot:info -->';
     const comments = await github.paginate(github.rest.issues.listComments, {
