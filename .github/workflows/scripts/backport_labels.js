@@ -121,6 +121,12 @@ module.exports = async ({ github, context, core }) => {
   await core.summary
     .addHeading('Backport Labels Gate', 2)
     .addRaw(`**Result:** ${gatePassed ? 'PASSED' : 'FAILED'}`)
+    .addBreak()
+    .addRaw(
+      'Each `backport/release-vX.Y` label on this PR signals the release ' +
+      'process to cherry-pick the merged commit onto that release branch. ' +
+      'Apply `skip-releases-backport` when no backport is needed.'
+    )
     .addHeading('PR labels', 3)
     .addList(prLabels.length === 0 ? ['(none)'] : prLabels)
     .addHeading('Live backport labels', 3)
