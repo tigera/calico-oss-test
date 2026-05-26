@@ -116,20 +116,6 @@ module.exports = async ({ github, context, core }) => {
   const hasBackport = prLabels.some(n => backportRe.test(n));
   const gatePassed = hasNoBackport || hasBackport;
 
-  // Log the gate state to the action log. The PR author reaches it by
-  // clicking "Details" on the validate-backport-labels check. Plain text
-  // only; GitHub does not render markdown in action logs.
-  core.info('=== Backport Labels Gate ===');
-  core.info(`PR:                    #${pr.number} (${pr.html_url})`);
-  core.info(`Head SHA:              ${pr.head.sha}`);
-  core.info(`PR labels:             ${prLabels.length === 0 ? '(none)' : prLabels.join(', ')}`);
-  core.info(`Live backport labels:  ${expectedLabels.join(', ')}`);
-  core.info(`Gate:                  ${gatePassed ? 'PASSED' : 'FAILED'}`);
-  if (!gatePassed) {
-    core.info(`Action needed:         add skip-releases-backport or one of: ${expectedLabels.join(', ')}`);
-  }
-  core.info('============================');
-
   // Job summary so the gate result and labels show up directly on the
   // workflow run page (markdown renders here, unlike step logs).
   await core.summary
