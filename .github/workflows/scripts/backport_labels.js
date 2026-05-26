@@ -5,13 +5,10 @@
 module.exports = async ({ github, context, core }) => {
   // Step 1: Sync backport labels
   const { owner, repo } = context.repo;
-  const wr = context.payload.workflow_run;
-  const headSha = wr.head_sha;
-  const headBranch = wr.head_branch;
-  const headRepoOwner = wr.head_repository?.owner?.login;
+  const headSha = context.payload.workflow_run?.head_sha;
 
-  if (!headSha || !headBranch || !headRepoOwner) {
-    core.setFailed('workflow_run payload missing head_sha, head_branch, or head_repository.owner.login.');
+  if (!headSha) {
+    core.setFailed('workflow_run payload missing head_sha.');
     return;
   }
 
@@ -32,20 +29,18 @@ module.exports = async ({ github, context, core }) => {
     throw new Error(`unreachable: withRetry exited loop without returning (${label})`);
   }
 
-  const prs = await withRetry(() => github.rest.pulls.list({
-    owner, repo,
-    head: `${headRepoOwner}:${headBranch}`,
-    state: 'open',
-    per_page: 1,
-  }), 'pulls.list');
-  const pr = prs.data[0];
+  // Direct lookup by commit SHA. Works for both same-repo and fork PRs;
+  // pulls.list with head=OWNER:BRANCH filter only works for fork PRs.
+  const prsResp = await withRetry(() => github.rest.repos.listPullRequestsAssociatedWithCommit({
+    owner, repo, commit_sha: headSha,
+  }), 'listPullRequestsAssociatedWithCommit');
+  // Filter to PRs whose head is exactly this SHA (drops PRs that merely
+  // contain it as an ancestor) and that are still open. Implicit SHA-drift
+  // guard: if the PR was force-pushed since Stage 1 fired, its head.sha
+  // moved and this find() returns undefined.
+  const pr = prsResp.data.find(p => p.state === 'open' && p.head.sha === headSha);
   if (!pr) {
-    core.info(`No open PR for ${headRepoOwner}:${headBranch}; nothing to do.`);
-    return;
-  }
-
-  if (pr.head.sha !== headSha) {
-    core.info(`SHA drift: workflow_run fired for ${headSha} but PR head is now ${pr.head.sha}; skipping.`);
+    core.info(`No open PR with head SHA ${headSha}; nothing to do.`);
     return;
   }
 

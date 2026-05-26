@@ -6,8 +6,7 @@
 #
 # Trust model: stage 1 may execute fork-modified code from the PR head, but
 # it holds no token writes and no secrets. Stage 2 derives PR identity from
-# GitHub-set workflow_run metadata (head_sha, head_branch,
-# head_repository.owner.login), never from artifact content, so a fork
+# GitHub-set workflow_run.head_sha, never from artifact content, so a fork
 # cannot trick stage 2 into acting on a different PR.
 #
 # Branch protection should require the "validate-backport-labels" check
