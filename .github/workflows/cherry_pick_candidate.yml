@@ -1,0 +1,163 @@
+# Stage 2 of the cherry-pick-candidate auto-labeler. Triggered by
+# workflow_run when "Cherry-Pick Candidate (trigger)" completes.
+#
+# Asks the calico-backport-classifier agent whether the PR looks like a
+# backport candidate based on its title + body. If the agent recommends
+# `backport`, applies the `cherry-pick-candidate` label to the PR.
+# Idempotent: no-op if the label is already present.
+#
+# Trust model: stage 1 may execute fork-modified code from the PR head,
+# but it has zero permissions. Stage 2 runs from the base branch (trusted
+# workflow file) with issues:write. PR identity comes from GitHub-set
+# workflow_run.head_sha, never from artifact content.
+#
+# No-op until the BACKPORT_CLASSIFIER_AGENT_URL and
+# BACKPORT_CLASSIFIER_AGENT_TOKEN repo secrets are set: the first step
+# short-circuits with a warning if either is missing.
+
+name: Cherry-Pick Candidate
+on:
+  workflow_run:
+    workflows: ["Cherry-Pick Candidate (trigger)"]
+    types: [completed]
+
+concurrency:
+  group: cherry-pick-candidate-${{ github.event.workflow_run.head_repository.owner.login }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    env:
+      AGENT_URL: ${{ secrets.BACKPORT_CLASSIFIER_AGENT_URL }}
+      AGENT_TOKEN: ${{ secrets.BACKPORT_CLASSIFIER_AGENT_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      LABEL: cherry-pick-candidate
+    steps:
+      - name: Skip if classifier secrets are missing
+        id: gate
+        run: |
+          if [[ -z "$AGENT_URL" || -z "$AGENT_TOKEN" ]]; then
+            echo "::warning::BACKPORT_CLASSIFIER_AGENT_URL or BACKPORT_CLASSIFIER_AGENT_TOKEN missing — skipping classifier"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Look up PR by head SHA
+        id: pr
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          # workflow_run.pull_requests is empty for fork PRs; look up by
+          # commit SHA instead. Take the first matching open PR.
+          gh api "repos/$REPO/commits/$HEAD_SHA/pulls" > /tmp/prs.json
+          jq -r --arg sha "$HEAD_SHA" \
+            '[.[] | select(.state == "open" and .head.sha == $sha)] | .[0] // empty' \
+            /tmp/prs.json > /tmp/pr.json
+          if [[ ! -s /tmp/pr.json ]]; then
+            echo "::warning::no open PR found with head SHA $HEAD_SHA — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PR=$(jq -r '.number' /tmp/pr.json)
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "Found PR #$PR ($(jq -r '.html_url' /tmp/pr.json))"
+
+      - name: Skip if cherry-pick-candidate label already present
+        id: have_label
+        if: steps.gate.outputs.skip != 'true' && steps.pr.outputs.skip != 'true'
+        run: |
+          PR=${{ steps.pr.outputs.pr }}
+          HAS=$(gh api "repos/$REPO/issues/$PR/labels" \
+                 --jq "[.[] | select(.name == \"$LABEL\")] | length")
+          if [[ "$HAS" -gt 0 ]]; then
+            echo "PR #$PR already has the $LABEL label; nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Call backport classifier agent
+        id: agent
+        if: steps.gate.outputs.skip != 'true' && steps.pr.outputs.skip != 'true' && steps.have_label.outputs.skip != 'true'
+        run: |
+          PR=${{ steps.pr.outputs.pr }}
+          # Build the user-message text via jq --rawfile so PR body
+          # cannot inject shell or JSON syntax.
+          jq -r '.title' /tmp/pr.json > /tmp/pr_title.txt
+          jq -r '.body // ""' /tmp/pr.json > /tmp/pr_body.txt
+
+          jq -n \
+            --arg id "calico-backport-classifier-${PR}-${GITHUB_RUN_ID}" \
+            --arg pr "$PR" \
+            --rawfile title /tmp/pr_title.txt \
+            --rawfile body  /tmp/pr_body.txt \
+            '{
+              jsonrpc: "2.0",
+              id: $id,
+              method: "message/send",
+              params: {
+                message: {
+                  messageId: $id,
+                  role: "user",
+                  parts: [{
+                    kind: "text",
+                    text: ("PR number: " + $pr + "\nPR title: " + ($title|rtrimstr("\n")) + "\nPR body:\n" + $body)
+                  }]
+                },
+                configuration: { acceptedOutputModes: ["application/json", "text/plain"] }
+              }
+            }' > /tmp/req.json
+
+          # Soft-skip on transport errors; the classifier is best-effort.
+          set +e
+          HTTP=$(curl -sS --max-time 60 -o /tmp/resp.json -w '%{http_code}' \
+            "$AGENT_URL" \
+            -H "Authorization: Bearer $AGENT_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/req.json)
+          CURL_RC=$?
+          set -e
+          if [[ $CURL_RC -ne 0 || "$HTTP" != "200" ]]; then
+            echo "::warning::agent unreachable or errored (curl_rc=$CURL_RC, http=$HTTP) — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Agent returns a markdown-fenced JSON inside the artifact text.
+          # Tolerant of parse errors so a malformed response leaves an
+          # empty parsed.json and the empty-file check below skips.
+          set +e
+          jq -r '.result.artifacts[0].parts[0].text // empty' /tmp/resp.json \
+            | sed -e '/^```/d' \
+            | jq -c '{decision: .decision, confidence: .confidence, reason: .reason}' > /tmp/parsed.json
+          set -e
+          if [[ ! -s /tmp/parsed.json ]]; then
+            echo "::warning::could not parse agent response — skipping"
+            echo "--- raw response ---"
+            cat /tmp/resp.json || true
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          DECISION=$(jq -r '.decision' /tmp/parsed.json)
+          CONFIDENCE=$(jq -r '.confidence' /tmp/parsed.json)
+          REASON=$(jq -r '.reason' /tmp/parsed.json)
+          echo "agent decision: $DECISION (confidence=$CONFIDENCE)"
+          echo "reason: $REASON"
+          echo "decision=$DECISION" >> "$GITHUB_OUTPUT"
+
+      - name: Apply cherry-pick-candidate label
+        if: >-
+          steps.gate.outputs.skip != 'true' &&
+          steps.pr.outputs.skip != 'true' &&
+          steps.have_label.outputs.skip != 'true' &&
+          steps.agent.outputs.skip != 'true' &&
+          steps.agent.outputs.decision == 'backport'
+        run: |
+          PR=${{ steps.pr.outputs.pr }}
+          echo "Adding $LABEL to PR #$PR"
+          gh api -X POST "repos/$REPO/issues/$PR/labels" \
+            -f "labels[]=$LABEL"
