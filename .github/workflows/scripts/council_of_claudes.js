@@ -33,6 +33,7 @@ const PERSONAS = [
   // A "simulated human reviewer" persona distilled from a real reviewer's comment history.
   // Uses a custom avatar image (rendered from the public repo) instead of an emoji.
   { key: 'nelljerram',      title: 'Nell',                    emoji: '🧑‍💻', accent: 'IMPORTANT', image: 'https://raw.githubusercontent.com/tigera/calico-oss-test/master/.github/assets/nell.png', tagline: 'simulated reviewer · simplicity · naming · error handling · keep useful comments', urlEnv: 'NELLJERRAM_AGENT_URL', tokenEnv: 'NELLJERRAM_AGENT_TOKEN' },
+  { key: 'caseydavenport',  title: 'Casey',                   emoji: '🧑‍🔧', accent: 'WARNING',   image: 'https://raw.githubusercontent.com/tigera/calico-oss-test/master/.github/assets/casey.png', tagline: 'simulated reviewer · testing discipline · API design · simplicity · robustness', urlEnv: 'CASEYDAVENPORT_AGENT_URL', tokenEnv: 'CASEYDAVENPORT_AGENT_TOKEN' },
 ];
 
 // Cap the diff we send to keep within model context. Large-PR handling is out
