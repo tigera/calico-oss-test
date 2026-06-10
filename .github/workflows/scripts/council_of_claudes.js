@@ -7,10 +7,15 @@
 // (sourced from repo secrets). Any persona whose vars are unset is skipped
 // with a warning, so the workflow is usable with only one persona configured.
 //
-// Agent call contract (verified against tigera/agents-menagerie):
-//   POST <url>  with Bearer <token>, JSON-RPC 2.0 method "message/send".
-//   Input  -> params.message.parts[0].text
-//   Output <- result.artifacts[0].parts[0].text  (markdown)
+// Agent call contract (verified against tigera/agents-menagerie + live tests):
+//   POST <url> with Bearer <token>, JSON-RPC 2.0.
+//   The public endpoint enforces a ~30s cap on a synchronous response, but a
+//   full review generation takes longer, so we submit ASYNCHRONOUSLY:
+//     1. message/send with params.configuration.blocking=false
+//        -> returns immediately with result.id (a task id), state "submitted".
+//     2. poll tasks/get { id } every few seconds until status.state is
+//        terminal; on "completed", the review is result.artifacts[0].parts[0].text.
+//   Each individual call is fast, so none hits the 30s cap.
 
 const PERSONAS = [
   { key: 'correctness',     title: 'Correctness',             urlEnv: 'CORRECTNESS_AGENT_URL',     tokenEnv: 'CORRECTNESS_AGENT_TOKEN' },
@@ -21,6 +26,13 @@ const PERSONAS = [
 // Cap the diff we send to keep within model context. Large-PR handling is out
 // of scope for the hackathon; oversized diffs are truncated with a note.
 const MAX_DIFF_BYTES = 100 * 1024;
+
+// Async task polling parameters.
+const POLL_INTERVAL_MS = 5_000;
+const MAX_POLL_MS = 10 * 60 * 1000; // give a slow generation up to 10 minutes
+const RPC_TIMEOUT_MS = 30_000;      // each individual call is quick
+
+const sleep = ms => new Promise(res => setTimeout(res, ms));
 
 // Sanitize agent-controlled text before logging so it cannot inject
 // ::workflow-command:: strings into the Actions log (matches the guard in
@@ -35,47 +47,72 @@ function stripOuterFence(text) {
   return (m ? m[1] : t).trim();
 }
 
-// Call one persona agent. Returns its markdown review text, or null on failure.
-// Up to 3 attempts with 5s/10s backoff (mirrors cherry_pick_candidate.js).
-async function callAgent({ core, title, url, token, messageText, msgId }) {
-  const payload = {
-    jsonrpc: '2.0',
-    id: msgId,
-    method: 'message/send',
-    params: {
-      message: {
-        messageId: msgId,
-        role: 'user',
-        parts: [{ kind: 'text', text: messageText }],
-      },
-      configuration: { acceptedOutputModes: ['application/json', 'text/plain'] },
-    },
-  };
+// One JSON-RPC POST. Throws on non-2xx or network error.
+async function rpc(url, token, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
+  });
+  if (!r.ok) throw new Error(`http ${r.status}`);
+  return r.json();
+}
 
+// Pull the agent's text out of a completed task: prefer the first artifact's
+// text part, fall back to the final status message.
+function extractText(task) {
+  const fromArtifacts = task?.artifacts?.[0]?.parts?.find(p => p.text)?.text;
+  if (fromArtifacts) return fromArtifacts;
+  return task?.status?.message?.parts?.find(p => p.text)?.text || '';
+}
+
+// Submit the review asynchronously and poll to completion. Returns the
+// persona's markdown review, or null on failure.
+async function reviewWithAgent({ core, title, url, token, messageText, msgId }) {
+  // 1. Submit non-blocking (up to 3 attempts with 5s/10s backoff).
+  let taskId = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
+      const sub = await rpc(url, token, {
+        jsonrpc: '2.0', id: msgId, method: 'message/send',
+        params: {
+          message: { messageId: msgId, role: 'user', kind: 'message', parts: [{ kind: 'text', text: messageText }] },
+          configuration: { blocking: false, acceptedOutputModes: ['application/json', 'text/plain'] },
         },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(120_000),
       });
-      if (r.ok) {
-        const response = await r.json();
-        const raw = response.result?.artifacts?.[0]?.parts?.[0]?.text
-          ?? response.result?.parts?.[0]?.text
-          ?? '';
-        return stripOuterFence(raw);
-      }
-      core.info(`  ${title}: attempt ${attempt} failed (http=${r.status})`);
+      taskId = sub.result?.id;
+      if (taskId) break;
+      core.info(`  ${title}: submit returned no task id (attempt ${attempt})`);
     } catch (e) {
-      core.info(`  ${title}: attempt ${attempt} failed (${e.message})`);
+      core.info(`  ${title}: submit attempt ${attempt} failed (${e.message})`);
     }
-    if (attempt < 3) await new Promise(res => setTimeout(res, attempt * 5000));
+    if (attempt < 3) await sleep(attempt * 5000);
   }
+  if (!taskId) return null;
+
+  // 2. Poll tasks/get until the task reaches a terminal state. Transient poll
+  //    errors are tolerated (keep polling until the overall deadline).
+  const start = Date.now();
+  while (Date.now() - start < MAX_POLL_MS) {
+    await sleep(POLL_INTERVAL_MS);
+    let task;
+    try {
+      const g = await rpc(url, token, { jsonrpc: '2.0', id: `${msgId}-get`, method: 'tasks/get', params: { id: taskId } });
+      task = g.result;
+    } catch (e) {
+      core.info(`  ${title}: poll error (${e.message}), will retry`);
+      continue;
+    }
+    const state = task?.status?.state;
+    if (state === 'completed') return stripOuterFence(extractText(task));
+    if (state === 'failed' || state === 'canceled' || state === 'rejected') {
+      core.warning(`${title}: task ${state}`);
+      return null;
+    }
+    // "submitted" / "working" -> keep polling
+  }
+  core.warning(`${title}: task did not complete within ${MAX_POLL_MS / 1000}s`);
   return null;
 }
 
@@ -123,9 +160,9 @@ module.exports = async ({ github, context, core }) => {
   core.info(`Reviewing PR #${pull_number} with ${active.length} persona(s): ${active.map(p => p.title).join(', ')}`);
   const results = await Promise.all(active.map(async p => {
     const msgId = `council-${p.key}-${pull_number}-${process.env.GITHUB_RUN_ID}`;
-    const review = await callAgent({ core, title: p.title, url: p.url, token: p.token, messageText, msgId });
+    const review = await reviewWithAgent({ core, title: p.title, url: p.url, token: p.token, messageText, msgId });
     if (!review) {
-      core.warning(`${p.title}: agent unreachable after 3 attempts, skipping`);
+      core.warning(`${p.title}: no review produced, skipping`);
       return null;
     }
     core.info(`${p.title}: received ${review.length} chars of feedback`);
