@@ -82,7 +82,8 @@ function annotateDiff(diff) {
     }
     if (line.startsWith('+')) { addAnchor(newLine); out.push(`[L${newLine}] ${line}`); newLine++; }
     else if (line.startsWith('-')) { out.push(`[----] ${line}`); }
-    else { addAnchor(newLine); out.push(`[L${newLine}] ${line}`); newLine++; } // context (incl. blank)
+    else if (line.startsWith(' ')) { addAnchor(newLine); out.push(`[L${newLine}] ${line}`); newLine++; } // context line
+    else { out.push(line); } // trailing empty split element or unhandled metadata — never anchor/advance
   }
   return { annotated: out.join('\n'), anchors };
 }
