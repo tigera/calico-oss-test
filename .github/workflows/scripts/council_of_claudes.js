@@ -65,7 +65,7 @@ function gatherContext(core, touchedPaths) {
   for (const c of chosen) {
     let content;
     try { content = fs.readFileSync(path.join(ws, c.file), 'utf8').trim(); }
-    catch { core.info(`  context: ${c.file} not present in workspace, skipping`); continue; }
+    catch (e) { core.info(`  context: ${c.file} unavailable (${e.message}), skipping`); continue; }
     if (total + content.length > MAX_CONTEXT_BYTES) { core.info(`  context: budget reached, skipping ${c.file}`); continue; }
     total += content.length;
     blocks.push(`### ${c.file}\n\n${content}`);
@@ -255,8 +255,13 @@ module.exports = async ({ github, context, core }) => {
   }
   const { annotated, anchors } = annotateDiff(diff);
 
-  // Ground the review in Calico's own context files, scoped to the paths this PR touches.
-  const touchedPaths = new Set((diff.match(/^\+\+\+ b\/(.+)$/gm) || []).map(l => l.slice('+++ b/'.length)));
+  // Ground the review in Calico's own context files, scoped to the paths this PR
+  // touches. Parse both new (+++ b/) and old (--- a/) file headers so delete-only
+  // changes still match path-scoped context; /dev/null headers lack the a//b/
+  // prefix and are naturally excluded.
+  const touchedPaths = new Set(
+    (diff.match(/^(?:\+\+\+ b|--- a)\/.+$/gm) || []).map(l => l.replace(/^(?:\+\+\+ b|--- a)\//, '')),
+  );
   const projectContext = gatherContext(core, touchedPaths);
 
   const messageText = projectContext +
