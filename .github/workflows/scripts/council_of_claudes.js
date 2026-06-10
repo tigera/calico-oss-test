@@ -91,7 +91,7 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId }) 
       if (taskId) break;
       core.info(`  ${title}: submit returned no task id (attempt ${attempt})`);
     } catch (e) {
-      core.info(`  ${title}: submit attempt ${attempt} failed (${e.message})`);
+      core.info(`  ${title}: submit attempt ${attempt} failed (${safe(e.message)})`);
     }
     if (attempt < 3) await sleep(attempt * 5000);
   }
@@ -107,7 +107,7 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId }) 
       const g = await rpc(url, token, { jsonrpc: '2.0', id: `${msgId}-get`, method: 'tasks/get', params: { id: taskId } });
       task = g.result;
     } catch (e) {
-      core.info(`  ${title}: poll error (${e.message}), will retry`);
+      core.info(`  ${title}: poll error (${safe(e.message)}), will retry`);
       continue;
     }
     const state = task?.status?.state;
