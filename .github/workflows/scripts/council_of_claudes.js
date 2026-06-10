@@ -178,19 +178,33 @@ module.exports = async ({ github, context, core }) => {
     return { persona: p, review };
   }));
 
-  // 4. Post one PR review per persona that responded.
+  // 4. Post one *sticky* PR review per persona. Each body carries a hidden
+  //    per-persona marker; if a prior review with that marker exists we update
+  //    it in place (so re-runs replace rather than accumulate), otherwise we
+  //    create a new one. We replace (not merge): each run reflects the current
+  //    diff. Staying in the reviews API also keeps the door open for inline
+  //    line-anchored comments later (a comments[] array on the review).
+  const existing = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number });
   let posted = 0;
   for (const res of results) {
     if (!res) continue;
-    const body = `### 🤖 Council of Claudes — ${res.persona.title}\n\n${res.review}`;
+    const marker = `<!-- council-of-claudes:${res.persona.key} -->`;
+    const body = `### 🤖 Council of Claudes — ${res.persona.title}\n\n${res.review}\n\n${marker}`;
+    // Most recent prior review carrying this persona's marker, if any.
+    const prior = existing.filter(r => (r.body || '').includes(marker)).pop();
     try {
-      await github.rest.pulls.createReview({
-        owner, repo, pull_number, commit_id: pr.head.sha, event: 'COMMENT', body,
-      });
+      if (prior) {
+        await github.rest.pulls.updateReview({ owner, repo, pull_number, review_id: prior.id, body });
+        core.info(`${res.persona.title}: review updated in place (#${prior.id})`);
+      } else {
+        await github.rest.pulls.createReview({
+          owner, repo, pull_number, commit_id: pr.head.sha, event: 'COMMENT', body,
+        });
+        core.info(`${res.persona.title}: review posted (new)`);
+      }
       posted++;
-      core.info(`${res.persona.title}: review posted`);
     } catch (e) {
-      core.warning(`${res.persona.title}: failed to post review (${safe(e.message)})`);
+      core.warning(`${res.persona.title}: failed to post/update review (${safe(e.message)})`);
     }
   }
   core.info(`Done: ${posted}/${active.length} persona review(s) posted to PR #${pull_number}`);
