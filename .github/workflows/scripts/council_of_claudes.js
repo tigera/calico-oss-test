@@ -47,7 +47,9 @@ function stripOuterFence(text) {
   return (m ? m[1] : t).trim();
 }
 
-// One JSON-RPC POST. Throws on non-2xx or network error.
+// One JSON-RPC POST. Throws on non-2xx, network error, or a JSON-RPC error
+// payload (a 200 response carrying an `error` field — otherwise it would be
+// silently mistaken for a missing result).
 async function rpc(url, token, body) {
   const r = await fetch(url, {
     method: 'POST',
@@ -56,7 +58,11 @@ async function rpc(url, token, body) {
     signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   });
   if (!r.ok) throw new Error(`http ${r.status}`);
-  return r.json();
+  const json = await r.json();
+  if (json.error) {
+    throw new Error(`json-rpc error ${json.error.code ?? '?'}: ${json.error.message ?? 'unknown'}`);
+  }
+  return json;
 }
 
 // Pull the agent's text out of a completed task: prefer the first artifact's
@@ -145,7 +151,10 @@ module.exports = async ({ github, context, core }) => {
   let diff = diffResp.data;
   let truncated = false;
   if (Buffer.byteLength(diff, 'utf8') > MAX_DIFF_BYTES) {
-    diff = diff.slice(0, MAX_DIFF_BYTES);
+    // Slice on a byte boundary; TextDecoder with stream:true drops a trailing
+    // partial multi-byte sequence rather than emitting a replacement char.
+    const buf = Buffer.from(diff, 'utf8').subarray(0, MAX_DIFF_BYTES);
+    diff = new TextDecoder('utf-8').decode(buf, { stream: true });
     truncated = true;
     core.warning(`diff exceeds ${MAX_DIFF_BYTES} bytes, truncated (large-PR handling out of scope)`);
   }
