@@ -404,6 +404,7 @@ var _ = Describe("BPF Endpoint Manager", func() {
 		jumpMapEgr           *mock.Map
 		xdpJumpMap           *mock.Map
 		qosMap               *mock.Map
+		qosConnMap           *mock.Map
 	)
 
 	BeforeEach(func() {
@@ -435,6 +436,8 @@ var _ = Describe("BPF Endpoint Manager", func() {
 		commonMaps.IfStateMap = ifStateMap
 		qosMap = mock.NewMockMap(qos.MapParams)
 		commonMaps.QoSMap = qosMap
+		qosConnMap = mock.NewMockMap(qos.ConnMapParams)
+		commonMaps.QoSConnMap = qosConnMap
 		cparams := counters.MapParameters
 		cparams.ValueSize *= bpfmaps.NumPossibleCPUs()
 		countersMap = mock.NewMockMap(cparams)
