@@ -14,7 +14,8 @@
 # so the duplicate PR's diff equals exactly the as-reviewed diff. The synthetic
 # commit is intentionally unsigned (it's a throwaway benchmark artifact).
 #
-# Requires: gh (authenticated), git, a clean working tree.
+# Requires: gh (authenticated), git, a clean working tree, and a git remote that
+# points at the fork (tigera/calico-oss-test) — it need not be named "origin".
 set -euo pipefail
 
 # Operate from the repo root regardless of where this is invoked from — the steps
@@ -33,6 +34,15 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 START_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
+# Resolve the git remote that points at $FORK — don't assume it's named "origin"
+# (this may be run from an upstream or personal-fork clone). Used for the workflow
+# overlay fetch/checkout and for pushing the sample branches.
+FORK_REMOTE="$(git remote -v | awk -v r="$FORK" '$2 ~ ("github.com[:/]" r "(\\.git)?$") {print $1; exit}')"
+if [ -z "$FORK_REMOTE" ]; then
+  echo "ERROR: no git remote points at $FORK. Add one (e.g. 'git remote add origin git@github.com:$FORK.git')." >&2
+  exit 1
+fi
+
 echo "Looking up upstream PR #$N ..."
 title=$(gh api "repos/$UPREPO/pulls/$N" --jq '.title')
 author=$(gh api "repos/$UPREPO/pulls/$N" --jq '.user.login')
@@ -45,6 +55,7 @@ base=$(gh api "repos/$UPREPO/pulls/$N" --jq '.base.sha')
 humanComments=$(gh api "repos/$UPREPO/pulls/$N/comments?per_page=100" --paginate \
   --jq '.[] | select(.user.type=="User" and .in_reply_to_id==null) | [.created_at, .original_commit_id] | @tsv')
 head=$(printf '%s\n' "$humanComments" | sort | head -1 | cut -f2)
+# Count non-empty lines (an empty $humanComments still emits one blank line via printf).
 humans=$(printf '%s\n' "$humanComments" | grep -c . || true)
 if [ -z "$head" ] || [ "$head" = "null" ]; then
   echo "ERROR: no human review comment found for #$N — cannot reproduce an as-reviewed state." >&2; exit 1
@@ -70,6 +81,7 @@ fi
 echo "  fork  : ${fork:0:12}  (merge-base from compare API — the duplicate PR's base)"
 
 diffFile=$(mktemp)
+trap 'rm -f "$diffFile"' EXIT   # clean up the temp diff on any exit path
 gh api "repos/$UPREPO/compare/$base...$head" -H "Accept: application/vnd.github.diff" > "$diffFile"
 if grep -q '^Binary files' "$diffFile"; then
   echo "WARNING: as-reviewed diff includes binary files; the compare API omits binary content, so those won't reproduce." >&2
@@ -79,18 +91,18 @@ fi
 # That requires the as-reviewed diff itself not to touch .github/workflows.
 if grep -qE '^diff --git a/\.github/workflows/' "$diffFile"; then
   echo "ERROR: this PR's as-reviewed diff touches .github/workflows — incompatible with the overlay." >&2
-  rm -f "$diffFile"; exit 1
+  exit 1
 fi
 
-echo "Fetching the merge-base commit + the Council workflow from origin/master ..."
+echo "Fetching the merge-base commit (upstream) + the Council workflow ($FORK_REMOTE/master) ..."
 git fetch --quiet "$UP" "$fork"
-git fetch --quiet origin master
+git fetch --quiet "$FORK_REMOTE" master
 
 # Base branch: fork point, with ONLY the current Council workflow under .github/workflows
 # (strip the old snapshot's stale upstream CI).
 git checkout --quiet -B "$baseBr" "$fork"
 git rm -rq --ignore-unmatch .github/workflows >/dev/null 2>&1 || true
-git checkout origin/master -- .github/workflows/council_of_claudes.yml .github/workflows/scripts/council_of_claudes.js
+git checkout "$FORK_REMOTE/master" -- .github/workflows/council_of_claudes.yml .github/workflows/scripts/council_of_claudes.js
 git add -A .github/workflows
 git commit --quiet --no-gpg-sign -m "[sample #$N] base: Council workflow only (strip stale upstream CI)"
 
@@ -98,10 +110,9 @@ git commit --quiet --no-gpg-sign -m "[sample #$N] base: Council workflow only (s
 git checkout --quiet -B "$headBr" "$baseBr"
 if ! git apply --index --whitespace=nowarn "$diffFile"; then
   echo "ERROR: the as-reviewed diff did not apply cleanly onto the base." >&2
-  rm -f "$diffFile"; git checkout --quiet "$START_BRANCH"; git branch -D "$baseBr" "$headBr" >/dev/null 2>&1 || true
+  git checkout --quiet "$START_BRANCH"; git branch -D "$baseBr" "$headBr" >/dev/null 2>&1 || true
   exit 1
 fi
-rm -f "$diffFile"
 git commit --quiet --no-gpg-sign -m "[sample] Reproduce $UPREPO#$N as-first-reviewed state
 
 Mirrors the diff the human reviewers first saw on $UPREPO#$N
@@ -120,8 +131,8 @@ if [ "$DRY" = "1" ]; then
   exit 0
 fi
 
-echo "Pushing branches to $FORK ..."
-git push -f --quiet origin "$baseBr" "$headBr"
+echo "Pushing branches to $FORK (remote: $FORK_REMOTE) ..."
+git push -f --quiet "$FORK_REMOTE" "$baseBr" "$headBr"
 git checkout --quiet "$START_BRANCH"
 
 # Idempotent: if a sample PR already exists for this head, the force-push above

@@ -45,8 +45,9 @@ Writes `comparison-<N>.md`: a side-by-side of the **original human** review comm
 - `gh` CLI, authenticated (`gh auth status`)
 - `git`, `python3`
 - Network access to `github.com`
+- A git **remote pointing at the fork** (`tigera/calico-oss-test`) — it need not be named `origin`;
+  `gen-benchmark-pr.sh` resolves whichever remote targets the fork and pushes/overlays via it.
 
 ## Notes
-- Sample selection criteria + the as-first-reviewed methodology are documented in `hackathon.md`
-  at the repo root.
+- The **as-first-reviewed methodology** is described under `gen-benchmark-pr.sh` above.
 - These reproduce PRs against this **fork** (`calico-oss-test`), never upstream.

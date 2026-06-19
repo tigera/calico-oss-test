@@ -18,21 +18,26 @@ FORK = "tigera/calico-oss-test"
 EMOJI = {"correctness": "🔎", "maintainability": "🧪", "security": "🛡️"}
 
 
+def _gh(args):
+    """Run gh and return stdout, exiting with a clear error on failure — so a
+    failed call (auth expiry, rate limit, bad PR) isn't silently mistaken for an
+    empty result and rendered as a misleading "0 comments" comparison."""
+    out = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"error: `gh {' '.join(args)}` failed (exit {out.returncode}): {out.stderr.strip()}")
+    return out.stdout
+
+
 def gh_lines(path):
     """Run `gh api --paginate --jq '.[] | @json'` and yield parsed objects."""
-    out = subprocess.run(
-        ["gh", "api", path, "--paginate", "--jq", ".[] | @json"],
-        capture_output=True, text=True,
-    )
-    for ln in out.stdout.splitlines():
+    for ln in _gh(["api", path, "--paginate", "--jq", ".[] | @json"]).splitlines():
         ln = ln.strip()
         if ln:
             yield json.loads(ln)
 
 
 def gh_json(*args):
-    out = subprocess.run(["gh", *args], capture_output=True, text=True)
-    return out.stdout.strip()
+    return _gh(list(args)).strip()
 
 
 def clean(body, limit=200):
@@ -60,7 +65,7 @@ def main():
 
     # --- Duplicate PR (Council) ---
     dup = gh_json("pr", "list", "--repo", FORK, "--head", f"coc-sample-{n}-head",
-                  "--state", "all", "--json", "number", "--jq", ".[0].number")
+                  "--state", "all", "--json", "number", "--jq", ".[0].number // empty")
     council_inline, council_summaries = [], []
     if dup:
         for c in gh_lines(f"repos/{FORK}/pulls/{dup}/comments?per_page=100"):
