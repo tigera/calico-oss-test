@@ -221,6 +221,72 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId }) 
   return null;
 }
 
+// --- Orchestrator: cross-persona deduplication of inline comments ---
+const ORCH_URL_ENV = 'ORCHESTRATOR_AGENT_URL';
+const ORCH_TOKEN_ENV = 'ORCHESTRATOR_AGENT_TOKEN';
+
+// Robustly extract the orchestrator's { clusters: [...] } JSON from its response
+// (tolerates a ```json fence or stray prose). Returns the parsed object or null.
+function parseClusters(text) {
+  if (!text) return null;
+  const tries = [text.trim()];
+  const fence = text.match(/```[a-zA-Z]*\s*\n([\s\S]*?)\n```/);
+  if (fence) tries.push(fence[1].trim());
+  const first = text.indexOf('{'), last = text.lastIndexOf('}');
+  if (first !== -1 && last > first) tries.push(text.slice(first, last + 1));
+  for (const t of tries) {
+    try {
+      const obj = JSON.parse(t);
+      if (obj && Array.isArray(obj.clusters)) return obj;
+    } catch { /* try next candidate */ }
+  }
+  return null;
+}
+
+// Ask the orchestrator which inline comments are redundant duplicates and return
+// the SET of comment ids to drop. Lossless by construction: returns an empty set
+// (drop nothing → post everything) if the orchestrator is unconfigured, errors,
+// times out, or returns anything we can't safely apply.
+async function orchestrateDedup({ core, allInline }) {
+  const empty = new Set();
+  const url = process.env[ORCH_URL_ENV];
+  const token = process.env[ORCH_TOKEN_ENV];
+  if (!url || !token) {
+    core.info(`Orchestrator not configured (${ORCH_URL_ENV}/${ORCH_TOKEN_ENV} unset) — posting all comments`);
+    return empty;
+  }
+  if (allInline.length < 2) return empty; // nothing to dedupe
+
+  const msgId = `council-orchestrator-${process.env.GITHUB_RUN_ID}`;
+  const payload = JSON.stringify(allInline.map(c =>
+    ({ id: c.id, persona: c.persona, file: c.file, line: c.line, body: c.body })));
+  const messageText =
+    `Here are ${allInline.length} inline review comments from one pull request, as a JSON array. ` +
+    `Identify redundant duplicate groups and return the clusters JSON per your instructions.\n\n${payload}`;
+
+  const out = await reviewWithAgent({ core, title: 'Orchestrator', url, token, messageText, msgId });
+  if (!out) { core.warning('Orchestrator: no response — posting all comments unfiltered'); return empty; }
+  const parsed = parseClusters(out);
+  if (!parsed) { core.warning('Orchestrator: unparseable response — posting all comments unfiltered'); return empty; }
+
+  // Apply defensively: honor a cluster only if its survivor is a known id; drop
+  // only known duplicate ids; keep-wins (an id that survives anywhere is never
+  // dropped). Anything not mentioned is implicitly kept.
+  const known = new Set(allInline.map(c => c.id));
+  const survivors = new Set();
+  const candidates = new Set();
+  for (const cl of parsed.clusters) {
+    if (!cl || typeof cl.survivor !== 'string' || !known.has(cl.survivor)) continue;
+    survivors.add(cl.survivor);
+    const dups = Array.isArray(cl.duplicates) ? cl.duplicates.filter(d => known.has(d)) : [];
+    dups.forEach(d => candidates.add(d));
+    if (dups.length) core.info(`  orchestrator: keep ${cl.survivor}, drop [${dups.join(', ')}] — ${safe(cl.reason)}`);
+  }
+  const drop = new Set([...candidates].filter(id => !survivors.has(id)));
+  core.info(`Orchestrator: dropping ${drop.size} duplicate comment(s) of ${allInline.length} inline`);
+  return drop;
+}
+
 module.exports = async ({ github, context, core }) => {
   const { owner, repo } = context.repo;
   const pr = context.payload.pull_request;
@@ -296,8 +362,11 @@ module.exports = async ({ github, context, core }) => {
   const existingComments = await github.paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number });
   const repliedTo = new Set(existingComments.map(c => c.in_reply_to_id).filter(id => id != null));
 
-  let summaries = 0;
-  let inlineTotal = 0;
+  // 4a. Parse + classify each persona's findings. Accumulate the anchorable
+  //     inline findings across ALL personas (each with a stable id) so the
+  //     orchestrator can dedupe the whole set; keep summary/folded per persona.
+  const perPersona = [];
+  const allInline = [];
   for (const res of results) {
     if (!res) continue;
     const p = res.persona;
@@ -305,17 +374,30 @@ module.exports = async ({ github, context, core }) => {
     const badge = p.image ? `<img src="${p.image}" width="20" align="top" alt="${p.title}">` : p.emoji;
     const inlineMarker = `<!-- council-of-claudes:inline:${p.key} -->`;
     const { summary, findings } = parseFindings(res.review);
-
-    // Split findings into anchorable vs. unanchorable (folded into summary).
     const folded = [];
     const anchorable = [];
-    for (const f of findings) {
-      if (anchors.get(f.file)?.has(f.line)) anchorable.push(f);
-      else folded.push(f);
-    }
+    findings.forEach((f, i) => {
+      if (anchors.get(f.file)?.has(f.line)) {
+        const id = `${p.key}-${i}`;
+        anchorable.push({ id, ...f });
+        allInline.push({ id, persona: p.title, file: f.file, line: f.line, body: f.body });
+      } else {
+        folded.push(f); // no valid line anchor → goes to the summary
+      }
+    });
+    perPersona.push({ p, badge, inlineMarker, summary, folded, anchorable });
+  }
 
-    // 4a. Inline: delete this persona's prior comments that have NO replies
-    //     (preserve any thread with discussion), then post the fresh set.
+  // 4b. Orchestrator: dedupe the combined inline set → ids to drop. Lossless on
+  //     any failure / unconfigured (returns empty → post everything).
+  const drop = await orchestrateDedup({ core, allInline });
+
+  // 4c. Post per persona: delete prior no-reply inline, post surviving inline
+  //     (skipping orchestrator-dropped duplicates), then the sticky summary.
+  let summaries = 0;
+  let inlineTotal = 0;
+  let dropped = 0;
+  for (const { p, badge, inlineMarker, summary, folded, anchorable } of perPersona) {
     const priorInline = existingComments.filter(c => (c.body || '').includes(inlineMarker));
     for (const c of priorInline) {
       if (repliedTo.has(c.id)) continue; // keep — has a discussion thread
@@ -327,6 +409,7 @@ module.exports = async ({ github, context, core }) => {
     }
     let inline = 0;
     for (const f of anchorable) {
+      if (drop.has(f.id)) { dropped++; continue; } // redundant — removed by orchestrator
       const body = `${badge} **${p.title}** — ${f.body}\n\n${inlineMarker}`;
       try {
         await github.rest.pulls.createReviewComment({
@@ -341,8 +424,8 @@ module.exports = async ({ github, context, core }) => {
     }
     inlineTotal += inline;
 
-    // 4b. Summary: sticky review, updated in place. Folded findings (no valid
-    //     line anchor) are listed here so nothing is lost.
+    // Summary: sticky review, updated in place. Folded findings (no valid line
+    // anchor) are listed here so nothing is lost.
     const marker = `<!-- council-of-claudes:${p.key} -->`;
     let body =
       `### ${badge} Council of Claudes — ${p.title}\n\n` +
@@ -368,5 +451,5 @@ module.exports = async ({ github, context, core }) => {
       core.warning(`${p.title}: failed to post/update summary (${safe(e.message)})`);
     }
   }
-  core.info(`Done: ${summaries}/${active.length} summaries, ${inlineTotal} inline comment(s) on PR #${pull_number}`);
+  core.info(`Done: ${summaries}/${active.length} summaries, ${inlineTotal} inline posted, ${dropped} duplicate(s) dropped on PR #${pull_number}`);
 };

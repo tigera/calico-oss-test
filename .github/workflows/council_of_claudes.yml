@@ -43,6 +43,9 @@ jobs:
       NELLJERRAM_AGENT_TOKEN: ${{ secrets.NELLJERRAM_AGENT_TOKEN }}
       CASEYDAVENPORT_AGENT_URL: ${{ secrets.CASEYDAVENPORT_AGENT_URL }}
       CASEYDAVENPORT_AGENT_TOKEN: ${{ secrets.CASEYDAVENPORT_AGENT_TOKEN }}
+      # Orchestrator (cross-persona dedup); if unset, all comments are posted unfiltered.
+      ORCHESTRATOR_AGENT_URL: ${{ secrets.ORCHESTRATOR_AGENT_URL }}
+      ORCHESTRATOR_AGENT_TOKEN: ${{ secrets.ORCHESTRATOR_AGENT_TOKEN }}
     steps:
       # pull_request checks out the merge ref by default, so the script comes
       # from the PR's own tree — letting us iterate on the workflow via its PR.
