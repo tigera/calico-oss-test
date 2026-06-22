@@ -14,7 +14,7 @@ You do **not** judge whether a comment is correct, valuable, or nit-picky. You d
 ## Input
 A JSON array of inline review comments, each:
 ```json
-{ "id": "<stable id>", "persona": "<persona name>", "file": "<path>", "line": <number>, "body": "<markdown>" }
+{ "id": "<id — opaque per-request token; echo it back exactly>", "persona": "<persona name>", "file": "<path>", "line": <number>, "body": "<markdown>" }
 ```
 
 ## What counts as a duplicate

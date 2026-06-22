@@ -226,11 +226,12 @@ const ORCH_URL_ENV = 'ORCHESTRATOR_AGENT_URL';
 const ORCH_TOKEN_ENV = 'ORCHESTRATOR_AGENT_TOKEN';
 
 // Robustly extract the orchestrator's { clusters: [...] } JSON from its response
-// (tolerates a ```json fence or stray prose). Returns the parsed object or null.
+// (tolerates a ```json fence — single- or multi-line — or stray prose). Returns
+// the parsed object or null.
 function parseClusters(text) {
   if (!text) return null;
   const tries = [text.trim()];
-  const fence = text.match(/```[a-zA-Z]*\s*\n([\s\S]*?)\n```/);
+  const fence = text.match(/```[a-zA-Z]*\s*([\s\S]*?)```/); // handles single-line fences too
   if (fence) tries.push(fence[1].trim());
   const first = text.indexOf('{'), last = text.lastIndexOf('}');
   if (first !== -1 && last > first) tries.push(text.slice(first, last + 1));
@@ -243,10 +244,38 @@ function parseClusters(text) {
   return null;
 }
 
+// Pure decision logic: given the inline comments and the orchestrator's parsed
+// clusters, return the SET of ids to drop. No env / network — directly unit
+// testable. Defensive against arbitrary LLM output: honor a cluster only if its
+// survivor is a known id; drop only known duplicate ids; keep-wins (an id that
+// survives anywhere is never dropped); anything not mentioned is implicitly kept.
+function applyClusters({ core, allInline, parsed }) {
+  const known = new Set(allInline.map(c => c.id));
+  const survivors = new Set();
+  const candidates = new Set();
+  for (const cl of parsed.clusters) {
+    // Every field here is LLM-controlled / possibly garbage — guard each access.
+    if (!cl || typeof cl.survivor !== 'string' || !known.has(cl.survivor)) continue;
+    survivors.add(cl.survivor);
+    const dups = Array.isArray(cl.duplicates) ? cl.duplicates.filter(d => known.has(d)) : [];
+    dups.forEach(d => candidates.add(d));
+    if (dups.length) core.info(`  orchestrator: keep ${cl.survivor}, drop [${dups.join(', ')}] — ${safe(cl.reason)}`);
+  }
+  // The prompt says each id appears at most once; if the model listed an id as
+  // both a survivor and a duplicate, keep-wins silently saves it — warn so a
+  // misbehaving orchestrator is visible rather than silently absorbed.
+  const conflicts = [...candidates].filter(id => survivors.has(id));
+  if (conflicts.length) core.warning(`Orchestrator: ${conflicts.length} id(s) listed as both survivor and duplicate (kept via keep-wins): ${conflicts.join(', ')}`);
+  const drop = new Set([...candidates].filter(id => !survivors.has(id)));
+  core.info(`Orchestrator: dropping ${drop.size} duplicate comment(s) of ${allInline.length} inline`);
+  return drop;
+}
+
 // Ask the orchestrator which inline comments are redundant duplicates and return
 // the SET of comment ids to drop. Lossless by construction: returns an empty set
 // (drop nothing → post everything) if the orchestrator is unconfigured, errors,
-// times out, or returns anything we can't safely apply.
+// times out, or returns anything we can't safely apply. The try/catch makes the
+// "post everything on failure" guarantee robust even if a callee starts throwing.
 async function orchestrateDedup({ core, allInline }) {
   const empty = new Set();
   const url = process.env[ORCH_URL_ENV];
@@ -255,36 +284,25 @@ async function orchestrateDedup({ core, allInline }) {
     core.info(`Orchestrator not configured (${ORCH_URL_ENV}/${ORCH_TOKEN_ENV} unset) — posting all comments`);
     return empty;
   }
-  if (allInline.length < 2) return empty; // nothing to dedupe
+  if (allInline.length < 2) return empty; // nothing to dedupe (need ≥2 comments)
 
-  const msgId = `council-orchestrator-${process.env.GITHUB_RUN_ID}`;
-  const payload = JSON.stringify(allInline.map(c =>
-    ({ id: c.id, persona: c.persona, file: c.file, line: c.line, body: c.body })));
-  const messageText =
-    `Here are ${allInline.length} inline review comments from one pull request, as a JSON array. ` +
-    `Identify redundant duplicate groups and return the clusters JSON per your instructions.\n\n${payload}`;
+  try {
+    const msgId = `council-orchestrator-${process.env.GITHUB_RUN_ID}`;
+    const payload = JSON.stringify(allInline.map(c =>
+      ({ id: c.id, persona: c.persona, file: c.file, line: c.line, body: c.body })));
+    const messageText =
+      `Here are ${allInline.length} inline review comments from one pull request, as a JSON array. ` +
+      `Identify redundant duplicate groups and return the clusters JSON per your instructions.\n\n${payload}`;
 
-  const out = await reviewWithAgent({ core, title: 'Orchestrator', url, token, messageText, msgId });
-  if (!out) { core.warning('Orchestrator: no response — posting all comments unfiltered'); return empty; }
-  const parsed = parseClusters(out);
-  if (!parsed) { core.warning('Orchestrator: unparseable response — posting all comments unfiltered'); return empty; }
-
-  // Apply defensively: honor a cluster only if its survivor is a known id; drop
-  // only known duplicate ids; keep-wins (an id that survives anywhere is never
-  // dropped). Anything not mentioned is implicitly kept.
-  const known = new Set(allInline.map(c => c.id));
-  const survivors = new Set();
-  const candidates = new Set();
-  for (const cl of parsed.clusters) {
-    if (!cl || typeof cl.survivor !== 'string' || !known.has(cl.survivor)) continue;
-    survivors.add(cl.survivor);
-    const dups = Array.isArray(cl.duplicates) ? cl.duplicates.filter(d => known.has(d)) : [];
-    dups.forEach(d => candidates.add(d));
-    if (dups.length) core.info(`  orchestrator: keep ${cl.survivor}, drop [${dups.join(', ')}] — ${safe(cl.reason)}`);
+    const out = await reviewWithAgent({ core, title: 'Orchestrator', url, token, messageText, msgId });
+    if (!out) { core.warning('Orchestrator: no response — posting all comments unfiltered'); return empty; }
+    const parsed = parseClusters(out);
+    if (!parsed) { core.warning('Orchestrator: unparseable response — posting all comments unfiltered'); return empty; }
+    return applyClusters({ core, allInline, parsed });
+  } catch (e) {
+    core.warning(`Orchestrator: unexpected error (${safe(e.message)}) — posting all comments unfiltered`);
+    return empty;
   }
-  const drop = new Set([...candidates].filter(id => !survivors.has(id)));
-  core.info(`Orchestrator: dropping ${drop.size} duplicate comment(s) of ${allInline.length} inline`);
-  return drop;
 }
 
 module.exports = async ({ github, context, core }) => {
@@ -378,6 +396,11 @@ module.exports = async ({ github, context, core }) => {
     const anchorable = [];
     findings.forEach((f, i) => {
       if (anchors.get(f.file)?.has(f.line)) {
+        // Run-scoped ephemeral id: generated and consumed within this single
+        // invocation (sent to the orchestrator, matched against its drop set).
+        // `i` is the index into `findings` (gaps where entries were folded are
+        // harmless — ids only need per-persona uniqueness); never persisted, so
+        // it must not be correlated across runs or against existingComments.
         const id = `${p.key}-${i}`;
         anchorable.push({ id, ...f });
         allInline.push({ id, persona: p.title, file: f.file, line: f.line, body: f.body });
