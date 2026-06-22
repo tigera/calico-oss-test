@@ -103,14 +103,27 @@ module.exports = async ({ github, context, core }) => {
   //    tests / docs). Filter out the bot's own label so the agent's
   //    verdict is not influenced by a prior classification round.
   const labels = (pr.labels || []).map(l => l.name).filter(n => n !== LABEL);
-  const filesResp = await github.rest.pulls.listFiles({
+  // Paginate so big PRs (the monorepo regularly has changes touching
+  // 100+ files) don't get silently truncated to the first page, which
+  // would bias the classifier or let a fork-PR pad with unrelated
+  // paths past the page boundary.
+  const files = await github.paginate(github.rest.pulls.listFiles, {
     owner, repo, pull_number: pr.number, per_page: 100,
   });
-  const changedFiles = filesResp.data.map(f => f.filename);
   const labelsText = labels.length === 0 ? '(none)' : labels.join(', ');
-  const filesText = changedFiles.length === 0
+  // Each entry is "- [status +A/-D] path" where status is added /
+  // removed / modified / renamed / copied and +A/-D are lines added
+  // and deleted. Status + size lets the classifier separate new API
+  // surface (`[added +N]` on api types) from small API fixes
+  // (`[modified +2/-1]`), and small defensive tweaks from substantial
+  // rewrites. previous_filename shows on any status that carries it
+  // (typically renamed, sometimes copied).
+  const filesText = files.length === 0
     ? '(none)'
-    : changedFiles.map(p => `- ${p}`).join('\n');
+    : files.map(f => {
+        const base = `- [${f.status} +${f.additions}/-${f.deletions}] ${f.filename}`;
+        return f.previous_filename ? `${base} (was ${f.previous_filename})` : base;
+      }).join('\n');
 
   // 4. Call the classifier agent. Up to 3 attempts with 5s, 10s backoff.
   const msgId = `calico-backport-classifier-${pr.number}-${process.env.GITHUB_RUN_ID}`;
