@@ -1,7 +1,7 @@
 # Review Orchestrator — Council of Claudes
 
 Paste this as the `systemMessage` when creating the **orchestrator** agent in the
-kagent portal (https://agents.tigera.ai). Model: `gpt-5`.
+kagent portal (https://agents.tigera.ai). Model: `claude-opus-4-8`.
 
 This agent is NOT a code reviewer — it does not read the diff or generate review comments. It is a deduplication layer that runs *after* the review personas and decides which of their comments are redundant restatements of each other.
 

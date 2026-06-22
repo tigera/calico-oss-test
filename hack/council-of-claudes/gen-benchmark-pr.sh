@@ -65,8 +65,12 @@ echo "  author: @$author   human top-level review comments: $humans"
 echo "  base  : ${base:0:12}"
 echo "  head  : ${head:0:12}  (earliest human-reviewed commit)"
 
-baseBr="coc-sample-$N-base"
-headBr="coc-sample-$N-head"
+# Optional iteration label (ITER=v2) → parallel duplicate PRs for the same
+# original, so a new run doesn't clobber an earlier labeled baseline. Empty by
+# default (branches stay coc-sample-<N>-base/head).
+SUFFIX="${ITER:+-$ITER}"
+baseBr="coc-sample-$N$SUFFIX-base"
+headBr="coc-sample-$N$SUFFIX-head"
 
 # Resolve the fork point (merge-base) and the as-reviewed diff via the GitHub
 # compare API rather than local git. This works even when the PR was force-pushed
@@ -147,7 +151,7 @@ fi
 
 echo "Opening PR ..."
 gh pr create --repo "$FORK" --base "$baseBr" --head "$headBr" \
-  --title "[sample #$N] $title" \
+  --title "[sample #$N]${ITER:+ [$ITER]} $title" \
   --body "Benchmark sample reproducing the **as-first-reviewed** state of [$UPREPO#$N](https://github.com/$UPREPO/pull/$N) (by @$author).
 
 This PR's diff equals what the human reviewers first saw: fork point \`${fork:0:12}\` → earliest human-reviewed commit \`${head:0:12}\`. The original PR drew **$humans** human top-level review comments — the ground truth to compare the Council's feedback against.
