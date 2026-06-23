@@ -21,11 +21,12 @@ its own keep/drop decisions in the v2 Actions log are the cleaner signal.
 
 Calls `gh` (authenticated) for all network access, so no Python TLS setup needed.
 """
-import sys, json, subprocess
+import sys, re, json, subprocess
 from collections import Counter
 
 FORK = "tigera/calico-oss-test"
-# persona key -> (display label, emoji). Human personas render without an emoji.
+MARKER_RE = re.compile(r"council-of-claudes:inline:([\w-]+)")
+# persona key -> (display label, emoji).
 PERSONAS = {
     "correctness": ("Correctness", "🔎"),
     "maintainability": ("Maintainability & Tests", "🧪"),
@@ -54,25 +55,32 @@ def gh_lines(path):
 
 
 def clean(body, limit=160):
-    """One-line, table-safe, truncated comment body (markers/images stripped)."""
-    b = body or ""
-    if "<!--" in b:
-        b = b.split("<!--")[0]
-    b = " ".join(b.split()).replace("|", "\\|")
+    """One-line, table-safe, truncated comment body (whitespace collapsed)."""
+    b = " ".join((body or "").split()).replace("|", "\\|")
     return (b[:limit] + "…") if len(b) > limit else b
 
 
 def council_inline(pr):
-    """Council inline review comments on a fork PR -> [{persona, file, line, body}]."""
+    """Council inline review comments on a fork PR -> [{persona, file, line, body, id}]."""
     out = []
     for c in gh_lines(f"repos/{FORK}/pulls/{pr}/comments?per_page=100"):
-        body = c.get("body", "")
-        if "council-of-claudes:inline:" not in body:
+        # Only count comments actually authored by the Council bot — a human reply
+        # that merely quotes a marker must not be tallied as Council output.
+        if c.get("user", {}).get("type") != "Bot":
             continue
-        persona = body.split("council-of-claudes:inline:")[1].split(" ")[0].strip("-> \n")
+        body = c.get("body", "")
+        m = MARKER_RE.search(body)
+        if not m:
+            continue
+        # Drop the hidden marker and the "<badge> **Persona** — " prefix; keep the
+        # human-facing text (label() re-adds the persona, so the prefix is redundant).
+        text = body.split("<!--", 1)[0]
+        if "—" in text:
+            text = text.split("—", 1)[1]
         out.append({
-            "persona": persona, "file": c.get("path", "?"),
-            "line": c.get("line") or c.get("original_line") or 0, "body": body,
+            "persona": m.group(1), "file": c.get("path", "?"),
+            "line": c.get("line") or c.get("original_line") or 0,
+            "body": text.strip(), "id": c.get("id"),
         })
     return out
 
@@ -132,13 +140,16 @@ def main():
     # Detail: what changed (supports human good/bad labeling of just the delta).
     def detail(rows, ka, kb, header):
         out.append(f"\n## {header}\n")
-        items = [r for r in rows if max(ka[(r['persona'], r['file'], r['line'])]
-                                        - kb[(r['persona'], r['file'], r['line'])], 0) > 0]
-        if not items:
+        delta = ka - kb  # Counter subtraction: only positive counts = exact unmatched multiplicity
+        if not delta:
             out.append("_(none)_")
             return
-        for r in sorted(items, key=lambda r: (r["persona"], r["file"], r["line"])):
-            out.append(f"- {label(r['persona'])} `{r['file']}:{r['line']}` — {clean(r['body'])}")
+        by_key = {}
+        for r in sorted(rows, key=lambda r: (r["persona"], r["file"], r["line"], r["id"] or 0)):
+            by_key.setdefault((r["persona"], r["file"], r["line"]), []).append(r)
+        for k in sorted(delta, key=lambda k: (k[0], k[1], k[2])):
+            for r in by_key.get(k, [])[:delta[k]]:  # emit exactly the unmatched count for this key
+                out.append(f"- {label(r['persona'])} `{r['file']}:{r['line']}` — {clean(r['body'])}")
 
     detail(A, kA, kB, f"Only in A (#{prA}) — present in A, absent in B")
     detail(B, kB, kA, f"Only in B (#{prB}) — present in B, absent in A")
