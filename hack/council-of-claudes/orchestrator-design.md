@@ -205,6 +205,44 @@ Generalized methodology (for every future change): **fresh duplicate PRs → com
 (a prior iteration now; a permanent labeled set eventually). Full regression suite = out of scope
 (tracked separately as future work); this is a lightweight one-time before/after for now.
 
+## Eval tooling (decided 2026-06-23)
+`eval-benchmark-pr.py` becomes a **two-iteration comparison**: `eval-benchmark-pr.py <prA> <prB>`
+compares the Council's inline comments on two duplicate PRs of the same original (e.g. v1 #218 vs
+v2 #238).
+- **Matching = location-based (option A): `(persona, file, line)`.** Both PRs reproduce the same
+  diff, so line numbers align. Deterministic / no evaluator variance (important for a tracked
+  metric); labeled honestly as a location match. Semantic (LLM) matching deferred to the scoring
+  phase.
+- **Metrics:** total per PR, shared (matched), only-in-A, only-in-B — overall and **per persona
+  (same-persona only)**.
+- **Caveat:** comparing two stochastic runs conflates the real change (e.g. orchestrator) with
+  gpt-5 run-to-run variance. For the *orchestrator specifically*, the cleanest signal is its own
+  `keep/drop` decisions in the v2 Actions log.
+
+## Human-in-the-loop quality scoring (FUTURE — own design discussion)
+The true success metric is human judgement ("is this comment valuable?"), since automated diffs
+measure *what changed*, not *better/worse*. Plan: humans mark each Council comment good/bad and we
+track good-rate across iterations → the basis for the eventual **single score**
+(e.g. `good/(good+bad)`). Make it cheap: **capture labels as GitHub 👍/👎 reactions** (one click,
+machine-readable) and only label the **changed** comments (the diff tool's only-in-A/only-in-B
+sets) since stable comments keep prior labels. Downside: human bandwidth. Refine later (same
+labelers, blind to which iteration, etc.). This is the path to the single numeric score.
+
+## First results (2026-06-23)
+First orchestrator eval, v1 (no orch) vs v2 (orch), personas held at gpt-5.
+- **Orchestrator validated on #238** (its keep/drop log): dropped **8 of 32** inline comments —
+  exactly the redundant clusters humans complained about (the connlimit double-decrement race
+  3→1, the unused `ct_value_clear_flags` macro 3→1, the ~30s/~60s comment mismatch, the
+  sleep-in-Eventually nit). Cross-persona, clarity-first survivor, real reasons. Works as designed.
+- **Variance dominates the v1-vs-v2 diff** (as predicted): #218↔#238 share only 6 of 35/24;
+  #200→#240 went *up* +6. So the eval tool's diff shows *what changed*, but the orchestrator's own
+  keep/drop log is the trustworthy attribution signal.
+- **Timeout problem (2 of 3 runs):** #240 orchestrator hit its 600s poll cap → graceful post-all
+  (0 dropped); #241 the whole **job hit `timeout-minutes: 15`** → cancelled → 0 comments posted.
+  The orchestrator adds a serial call, so the 15-min job cap can now kill the job *before* the
+  orchestrator's own graceful degradation kicks in. **Fix: raise job `timeout-minutes`** (≥ personas
+  worst-case ~8m + orchestrator poll 10m + posting → ~25-30m) so graceful degradation has room.
+
 ## Resolved design at a glance (v1)
 End-to-end flow:
 1. Personas (with **Lever-2** prompt tweaks) review the PR in parallel as today → inline comments + summaries.
