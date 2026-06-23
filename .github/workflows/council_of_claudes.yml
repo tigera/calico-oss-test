@@ -26,7 +26,11 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Headroom for the full serial path on a large/slow PR: 5 personas in
+    # parallel (worst ~8m) + the orchestrator's poll (MAX_POLL_MS 10m) + posting.
+    # Must exceed that so the orchestrator's own graceful degradation (post-all on
+    # timeout) can run instead of the whole job being cancelled mid-flight.
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
