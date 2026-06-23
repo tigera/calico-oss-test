@@ -96,6 +96,7 @@ module.exports = async ({ github, context, core }) => {
   const present = pr.labels.some(l => l.name === LABEL);
   core.info(`Label authority: bot (last actor: ${lastActor || 'none'}, present=${present})`);
 
+<<<<<<< HEAD
   // 3. Gather extra context for the classifier: existing labels and
   //    changed file paths. Both are stronger signals than parsing the
   //    body alone (labels are deliberate human classifications, paths
@@ -107,10 +108,14 @@ module.exports = async ({ github, context, core }) => {
   // 100+ files) don't get silently truncated to the first page, which
   // would bias the classifier or let a fork-PR pad with unrelated
   // paths past the page boundary.
+=======
+  const labels = (pr.labels || []).map(l => l.name).filter(n => n !== LABEL);
+>>>>>>> upstream/master
   const files = await github.paginate(github.rest.pulls.listFiles, {
     owner, repo, pull_number: pr.number, per_page: 100,
   });
   const labelsText = labels.length === 0 ? '(none)' : labels.join(', ');
+<<<<<<< HEAD
   // Each entry is "- [status +A/-D] path" where status is added /
   // removed / modified / renamed / copied and +A/-D are lines added
   // and deleted. Status + size lets the classifier separate new API
@@ -118,6 +123,8 @@ module.exports = async ({ github, context, core }) => {
   // (`[modified +2/-1]`), and small defensive tweaks from substantial
   // rewrites. previous_filename shows on any status that carries it
   // (typically renamed, sometimes copied).
+=======
+>>>>>>> upstream/master
   const filesText = files.length === 0
     ? '(none)'
     : files.map(f => {
