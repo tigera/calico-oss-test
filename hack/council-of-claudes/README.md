@@ -7,6 +7,9 @@ The idea: take a real upstream PR that humans reviewed, reproduce **the exact co
 reviewers first saw**, open it as a PR in this fork so the Council reviews it, then compare the
 Council's feedback to the original human review.
 
+**Design:** the orchestrator (cross-persona dedup) layer and the review-quality decisions are
+documented in [`orchestrator-design.md`](./orchestrator-design.md).
+
 ## Tools
 
 ### `gen-benchmark-pr.sh <upstream-PR-number>`
