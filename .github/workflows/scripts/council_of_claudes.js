@@ -91,6 +91,15 @@ const sleep = ms => new Promise(res => setTimeout(res, ms));
 // ::workflow-command:: strings into the Actions log.
 const safe = s => String(s ?? '').replace(/::/g, ':​:');
 
+// Node's fetch (undici) surfaces generic messages like "fetch failed" /
+// "terminated" and puts the actual reason (ECONNRESET, UND_ERR_*, etc.) on
+// e.cause. Surface both so error logs are diagnosable.
+function errDetail(e) {
+  const c = e?.cause;
+  const cause = c ? ` | cause: ${c.code || c.message || c}` : '';
+  return `${e?.message || e}${cause}`;
+}
+
 // Strip a single markdown fence that wraps the *entire* response, while
 // leaving any inner code/suggestion fences intact.
 function stripOuterFence(text) {
@@ -161,7 +170,13 @@ async function rpc(url, token, body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
   });
-  if (!r.ok) throw new Error(`http ${r.status}`);
+  if (!r.ok) {
+    // Include statusText and a short body snippet — a 5xx from the gateway often
+    // carries a reason (e.g. upstream timeout) that the bare status code hides.
+    let snippet = '';
+    try { snippet = (await r.text()).replace(/\s+/g, ' ').trim().slice(0, 200); } catch { /* ignore */ }
+    throw new Error(`http ${r.status} ${r.statusText}${snippet ? ` — ${snippet}` : ''}`);
+  }
   const json = await r.json();
   if (json.error) {
     throw new Error(`json-rpc error ${json.error.code ?? '?'}: ${json.error.message ?? 'unknown'}`);
@@ -195,31 +210,41 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId, ma
       if (taskId) break;
       core.info(`  ${title}: submit returned no task id (attempt ${attempt})`);
     } catch (e) {
-      core.info(`  ${title}: submit attempt ${attempt} failed (${safe(e.message)})`);
+      core.info(`  ${title}: submit attempt ${attempt} failed (${safe(errDetail(e))})`);
     }
     if (attempt < 3) await sleep(attempt * 5000);
   }
-  if (!taskId) return null;
+  if (!taskId) {
+    core.warning(`${title}: could not submit a task after 3 attempts`);
+    return null;
+  }
 
+  // Track poll outcomes so a timeout is diagnosable: a stuck task shows a
+  // non-terminal last state with healthy polls; a network problem shows poll errors.
   const start = Date.now();
+  let polls = 0, pollErrs = 0, lastState = 'none';
   while (Date.now() - start < maxPollMs) {
     await sleep(POLL_INTERVAL_MS);
     let task;
     try {
       const g = await rpc(url, token, { jsonrpc: '2.0', id: `${msgId}-get`, method: 'tasks/get', params: { id: taskId } });
       task = g.result;
+      polls++;
     } catch (e) {
-      core.info(`  ${title}: poll error (${safe(e.message)}), will retry`);
+      pollErrs++;
+      core.info(`  ${title}: poll error (${safe(errDetail(e))}), will retry`);
       continue;
     }
     const state = task?.status?.state;
+    if (state) lastState = state;
     if (state === 'completed') return stripOuterFence(extractText(task));
     if (state === 'failed' || state === 'canceled' || state === 'rejected') {
       core.warning(`${title}: task ${state}`);
       return null;
     }
   }
-  core.warning(`${title}: task did not complete within ${maxPollMs / 1000}s`);
+  core.warning(`${title}: task did not complete within ${maxPollMs / 1000}s ` +
+    `(last state: ${lastState}, ${polls} polls ok, ${pollErrs} poll errors)`);
   return null;
 }
 
@@ -320,7 +345,7 @@ async function orchestrateDedup({ core, allInline }) {
     if (!parsed) { core.warning('Orchestrator: unparseable response — posting all comments unfiltered'); return empty; }
     return applyClusters({ core, allInline, parsed });
   } catch (e) {
-    core.warning(`Orchestrator: unexpected error (${safe(e.message)}) — posting all comments unfiltered`);
+    core.warning(`Orchestrator: unexpected error (${safe(errDetail(e))}) — posting all comments unfiltered`);
     return empty;
   }
 }
@@ -447,7 +472,7 @@ module.exports = async ({ github, context, core }) => {
       try {
         await github.rest.pulls.deleteReviewComment({ owner, repo, comment_id: c.id });
       } catch (e) {
-        core.info(`  ${p.title}: could not delete inline #${c.id} (${safe(e.message)})`);
+        core.info(`  ${p.title}: could not delete inline #${c.id} (${safe(errDetail(e))})`);
       }
     }
     let inline = 0;
@@ -461,7 +486,7 @@ module.exports = async ({ github, context, core }) => {
         inline++;
       } catch (e) {
         // Line wasn't commentable after all — fold it into the summary so it isn't lost.
-        core.info(`  ${p.title}: inline anchor failed at ${safe(f.file)}:${f.line} (${safe(e.message)}), folding into summary`);
+        core.info(`  ${p.title}: inline anchor failed at ${safe(f.file)}:${f.line} (${safe(errDetail(e))}), folding into summary`);
         folded.push(f);
       }
     }
@@ -491,7 +516,7 @@ module.exports = async ({ github, context, core }) => {
       }
       summaries++;
     } catch (e) {
-      core.warning(`${p.title}: failed to post/update summary (${safe(e.message)})`);
+      core.warning(`${p.title}: failed to post/update summary (${safe(errDetail(e))})`);
     }
   }
   core.info(`Done: ${summaries}/${active.length} summaries, ${inlineTotal} inline posted, ${dropped} duplicate(s) dropped on PR #${pull_number}`);
