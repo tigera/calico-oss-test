@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Reproduce a projectcalico/calico PR's *as-first-reviewed-by-a-human* state as a
-# fresh PR in tigera/calico-oss-test, so the Council of Claudes workflow reviews
-# exactly the diff the human reviewers first saw (before the author addressed
-# feedback).
+# Reproduce a projectcalico/calico PR as a fresh PR in tigera/calico-oss-test so
+# the Council of Claudes workflow reviews it.
 #
 # Usage (run from anywhere in the repo):
 #   ./hack/council-of-claudes/gen-benchmark-pr.sh <upstream-PR-number>
 #   DRY_RUN=1 ./hack/council-of-claudes/gen-benchmark-pr.sh <n>   # build & verify locally; no push / no PR
 #
-# Method: the earliest *human* review comment pins the commit it was written
-# against (original_commit_id). We reproduce base...thatCommit as a single
-# commit between two fresh branches (coc-sample-N-base and coc-sample-N-head),
-# so the duplicate PR's diff equals exactly the as-reviewed diff. The synthetic
-# commit is intentionally unsigned (it's a throwaway benchmark artifact).
+# Method (auto-fallback by what the PR has):
+#  - HAS human review comments → reproduce the **as-first-reviewed** state: the
+#    earliest human review comment pins the commit it was written against
+#    (original_commit_id); we reproduce base...thatCommit (what the reviewers
+#    first saw), for the human-vs-Council comparison.
+#  - NO human review comments → reproduce the **full PR diff** (base...head) so the
+#    Council can still review it (e.g. PRs picked for live human evaluation); there
+#    is no original review to anchor to or compare against.
+# Either way the diff is applied as a single commit between two fresh branches
+# (coc-sample-N-base / -head). The synthetic commit is intentionally unsigned
+# (it's a throwaway benchmark artifact).
 #
 # Requires: gh (authenticated), git, a clean working tree, and a git remote that
 # points at the fork (tigera/calico-oss-test) — it need not be named "origin".
@@ -47,6 +51,7 @@ echo "Looking up upstream PR #$N ..."
 title=$(gh api "repos/$UPREPO/pulls/$N" --jq '.title')
 author=$(gh api "repos/$UPREPO/pulls/$N" --jq '.user.login')
 base=$(gh api "repos/$UPREPO/pulls/$N" --jq '.base.sha')
+prHead=$(gh api "repos/$UPREPO/pulls/$N" --jq '.head.sha')
 # Earliest human-reviewed commit + human comment count. NOTE: `gh api --paginate
 # --jq` runs the jq PER PAGE, so an aggregate like sort_by(...)|.[0] yields one
 # result *per page* (multi-line) on PRs with >100 comments. Stream each matching
@@ -57,13 +62,24 @@ humanComments=$(gh api "repos/$UPREPO/pulls/$N/comments?per_page=100" --paginate
 head=$(printf '%s\n' "$humanComments" | sort | head -1 | cut -f2)
 # Count non-empty lines (an empty $humanComments still emits one blank line via printf).
 humans=$(printf '%s\n' "$humanComments" | grep -c . || true)
+# Mode selection (auto-fallback):
+#  - human review comments present -> reproduce the AS-FIRST-REVIEWED state (anchor
+#    on the earliest reviewed commit) for the human-vs-Council comparison.
+#  - none -> reproduce the FULL PR diff (base..head) so the Council can still review
+#    it (e.g. PRs picked for live human evaluation); there's no original review to
+#    anchor to or compare against.
+if [ -n "$head" ] && [ "$head" != "null" ]; then
+  mode="as-first-reviewed"; headDesc="earliest human-reviewed commit"
+else
+  mode="full-diff"; head="$prHead"; headDesc="PR head (no human reviews → full diff)"
+fi
 if [ -z "$head" ] || [ "$head" = "null" ]; then
-  echo "ERROR: no human review comment found for #$N — cannot reproduce an as-reviewed state." >&2; exit 1
+  echo "ERROR: could not determine a head commit for #$N." >&2; exit 1
 fi
 echo "  title : $title"
-echo "  author: @$author   human top-level review comments: $humans"
+echo "  author: @$author   human top-level review comments: $humans   mode: $mode"
 echo "  base  : ${base:0:12}"
-echo "  head  : ${head:0:12}  (earliest human-reviewed commit)"
+echo "  head  : ${head:0:12}  ($headDesc)"
 
 # Optional iteration label (ITER=v2) → parallel duplicate PRs for the same
 # original, so a new run doesn't clobber an earlier labeled baseline. Empty by
@@ -110,20 +126,19 @@ git checkout "$FORK_REMOTE/master" -- .github/workflows/council_of_claudes.yml .
 git add -A .github/workflows
 git commit --quiet --no-gpg-sign -m "[sample #$N] base: Council workflow only (strip stale upstream CI)"
 
-# Head branch: base + the as-reviewed diff (from the compare API) as a single commit.
+# Head branch: base + the reproduced diff (from the compare API) as a single commit.
 git checkout --quiet -B "$headBr" "$baseBr"
 if ! git apply --index --whitespace=nowarn "$diffFile"; then
-  echo "ERROR: the as-reviewed diff did not apply cleanly onto the base." >&2
+  echo "ERROR: the reproduced diff did not apply cleanly onto the base." >&2
   git checkout --quiet "$START_BRANCH"; git branch -D "$baseBr" "$headBr" >/dev/null 2>&1 || true
   exit 1
 fi
-git commit --quiet --no-gpg-sign -m "[sample] Reproduce $UPREPO#$N as-first-reviewed state
+git commit --quiet --no-gpg-sign -m "[sample] Reproduce $UPREPO#$N ($mode)
 
-Mirrors the diff the human reviewers first saw on $UPREPO#$N
-('$title' by @$author) for the Council of Claudes benchmark.
-base(fork)=$fork  head(as-reviewed)=$head"
+Reproduces the $mode diff of $UPREPO#$N ('$title' by @$author) for the
+Council of Claudes benchmark. base(fork)=$fork  head=$head"
 
-echo "Reproduced diff stat (should match the upstream as-reviewed diff):"
+echo "Reproduced diff stat (should match the upstream $mode diff):"
 git --no-pager diff --stat "$baseBr" "$headBr" | tail -3
 echo "  PR diff touches .github/workflows (expect 0): $(git diff --name-only "$baseBr" "$headBr" | grep -c '^\.github/workflows/')"
 echo "  Council workflow present in head tree (expect 1): $(git ls-tree -r --name-only "$headBr" | grep -c 'workflows/council_of_claudes.yml')"
@@ -149,12 +164,18 @@ if [ -n "$existingPR" ]; then
   exit 0
 fi
 
+if [ "$mode" = "as-first-reviewed" ]; then
+  reproDesc="This PR reproduces the **as-first-reviewed** state — what the human reviewers first saw: fork point \`${fork:0:12}\` → earliest human-reviewed commit \`${head:0:12}\`. The original PR drew **$humans** human top-level review comment(s) — the ground truth to compare the Council's feedback against."
+else
+  reproDesc="This PR reproduces the **full diff** of the original PR (fork point \`${fork:0:12}\` → head \`${head:0:12}\`). The original PR has no human review comments, so it is intended for **live human evaluation** of the Council's feedback (no original-review ground truth)."
+fi
+
 echo "Opening PR ..."
 gh pr create --repo "$FORK" --base "$baseBr" --head "$headBr" \
   --title "[sample #$N]${ITER:+ [$ITER]} $title" \
-  --body "Benchmark sample reproducing the **as-first-reviewed** state of [$UPREPO#$N](https://github.com/$UPREPO/pull/$N) (by @$author).
+  --body "Benchmark sample reproducing [$UPREPO#$N](https://github.com/$UPREPO/pull/$N) (by @$author).
 
-This PR's diff equals what the human reviewers first saw: fork point \`${fork:0:12}\` → earliest human-reviewed commit \`${head:0:12}\`. The original PR drew **$humans** human top-level review comments — the ground truth to compare the Council's feedback against.
+$reproDesc
 
 🤖 Generated for the Council of Claudes benchmark."
 echo "Done."
