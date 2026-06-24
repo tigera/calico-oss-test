@@ -177,8 +177,10 @@ function extractText(task) {
 }
 
 // Submit the review asynchronously and poll to completion. Returns the
-// persona's markdown review, or null on failure.
-async function reviewWithAgent({ core, title, url, token, messageText, msgId }) {
+// persona's markdown review, or null on failure. `maxPollMs` bounds the poll
+// window (defaults to MAX_POLL_MS; the orchestrator passes a shorter per-attempt
+// budget so it can afford a fresh-task retry within the job timeout).
+async function reviewWithAgent({ core, title, url, token, messageText, msgId, maxPollMs = MAX_POLL_MS }) {
   let taskId = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -200,7 +202,7 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId }) 
   if (!taskId) return null;
 
   const start = Date.now();
-  while (Date.now() - start < MAX_POLL_MS) {
+  while (Date.now() - start < maxPollMs) {
     await sleep(POLL_INTERVAL_MS);
     let task;
     try {
@@ -217,13 +219,20 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId }) 
       return null;
     }
   }
-  core.warning(`${title}: task did not complete within ${MAX_POLL_MS / 1000}s`);
+  core.warning(`${title}: task did not complete within ${maxPollMs / 1000}s`);
   return null;
 }
 
 // --- Orchestrator: cross-persona deduplication of inline comments ---
 const ORCH_URL_ENV = 'ORCHESTRATOR_AGENT_URL';
 const ORCH_TOKEN_ENV = 'ORCHESTRATOR_AGENT_TOKEN';
+// A healthy orchestrator dedups in ~2-3 min; a much longer poll means the task
+// is stuck server-side, not slow. So bound each attempt and resubmit a *fresh*
+// task once — a stuck task usually doesn't recur on a new submission. Two
+// attempts at this budget still fit comfortably inside the 30m job timeout
+// (alongside the persona phase + posting).
+const ORCH_ATTEMPTS = 2;
+const ORCH_POLL_MS = 7 * 60 * 1000;
 
 // Robustly extract the orchestrator's { clusters: [...] } JSON from its response
 // (tolerates a ```json fence — single- or multi-line — or stray prose). Returns
@@ -287,15 +296,26 @@ async function orchestrateDedup({ core, allInline }) {
   if (allInline.length < 2) return empty; // nothing to dedupe (need ≥2 comments)
 
   try {
-    const msgId = `council-orchestrator-${process.env.GITHUB_RUN_ID}`;
     const payload = JSON.stringify(allInline.map(c =>
       ({ id: c.id, persona: c.persona, file: c.file, line: c.line, body: c.body })));
     const messageText =
       `Here are ${allInline.length} inline review comments from one pull request, as a JSON array. ` +
       `Identify redundant duplicate groups and return the clusters JSON per your instructions.\n\n${payload}`;
 
-    const out = await reviewWithAgent({ core, title: 'Orchestrator', url, token, messageText, msgId });
-    if (!out) { core.warning('Orchestrator: no response — posting all comments unfiltered'); return empty; }
+    // Up to ORCH_ATTEMPTS, each a *fresh* task (distinct msgId), bounded by
+    // ORCH_POLL_MS — so a task that hangs server-side gets a second shot.
+    let out = null;
+    for (let attempt = 1; attempt <= ORCH_ATTEMPTS && !out; attempt++) {
+      const msgId = `council-orchestrator-${process.env.GITHUB_RUN_ID}-${attempt}`;
+      out = await reviewWithAgent({
+        core, title: `Orchestrator (attempt ${attempt}/${ORCH_ATTEMPTS})`,
+        url, token, messageText, msgId, maxPollMs: ORCH_POLL_MS,
+      });
+      if (!out && attempt < ORCH_ATTEMPTS) {
+        core.warning(`Orchestrator: attempt ${attempt} produced no response — resubmitting a fresh task`);
+      }
+    }
+    if (!out) { core.warning('Orchestrator: no response after retries — posting all comments unfiltered'); return empty; }
     const parsed = parseClusters(out);
     if (!parsed) { core.warning('Orchestrator: unparseable response — posting all comments unfiltered'); return empty; }
     return applyClusters({ core, allInline, parsed });
