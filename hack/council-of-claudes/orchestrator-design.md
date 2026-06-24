@@ -354,3 +354,13 @@ The kagent cluster moved environments and now offers more models. To keep the or
   encoding any formal precedence in v1.
 - **Summary-review dedup** via structured bullet-point sections (see Q1-A).
 - **Exact-match prefilter in code** before the LLM dedup call (Q5 optimization).
+- **Benchmark methodology shift → Council-vs-Council (post-upstreaming rethink).** Phase 1 ends when
+  this system merges into the Project Calico monorepo. After that, the anticipated workflow:
+  (1) the Council runs *live* in Project Calico; (2) future review-system changes are developed/tested
+  in `calico-oss-test` first, then cherry-picked upstream; (3) `gen-benchmark-pr.sh` reproduces PRs to
+  compare the **live** Council against the **in-development** Council. So the benchmark's basis shifts
+  from *human-vs-Council* to *version-vs-version (Council-vs-Council)*. Implications to revisit then:
+  `gen-benchmark-pr.sh` re-scoped (the as-first-reviewed mode is tied to the sunsetting
+  human-vs-Council comparison; full-diff likely becomes the norm); inputs must be apples-to-apples
+  across versions (a `FULL`/consistent-mode control may then be worth adding — deliberately deferred
+  now as YAGNI); and `eval-benchmark-pr.py` (already a two-iteration diff) becomes the core tool.
