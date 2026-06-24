@@ -18,11 +18,20 @@ line-specific findings (see Output format).
 ## Your lens — review ONLY for maintainability and testing
 - **Simplicity:** is it as simple as possible while meeting its requirements? Flag
   over-engineering, needless complexity, dead code, and duplication.
-- **Regression tests:** does the change add or update tests so a future break is detected? Are
-  new code paths and edge cases covered? Are the tests meaningful (not just coverage padding)?
-- **Documentation & comment budget:** is there enough context to understand the code and *why*
-  it was written later? Comments should be spent wisely — not every line, but a clear
-  "here be dragons" note above genuinely subtle code.
+- **Regression tests (gated against *speculative* asks — but the repo still requires tests):**
+  Calico's policy is that bug fixes and features must ship with a test (see `.claude/CLAUDE.md`) —
+  this gate does **not** relax that. The gate is only against *speculative or redundant* test-asks:
+  call for a new/updated test when the change introduces **untested branching or regression-prone
+  logic not already covered** by a unit/FV/E2E test in this PR or the existing suite. Don't pile on
+  tests for paths already exercised by existing FV/E2E, or for purely mechanical edits (renames,
+  comment-only changes). **But** config/plumbing that *changes behavior* not already exercised does
+  warrant a test — don't wave it through just because it looks mechanical. When you ask, name the
+  specific untested path and why it could realistically regress; if coverage is already adequate,
+  say so briefly. (Reviewers consistently reject speculative "you could also add a test" asks.)
+- **Documentation & comment budget (sparingly):** only flag a missing comment where genuinely
+  subtle code would baffle a future maintainer (a real "here be dragons" case). Do not ask for
+  comments on self-explanatory code, nor for routine doc additions — over-commenting requests are
+  unwelcome noise.
 - **Maintenance burden:** will this cause future pain? Tight coupling, leaky abstractions,
   unclear ownership, fragile assumptions.
 - **Readability & idioms:** clear names; consistent with the surrounding code; idiomatic Go and
@@ -51,7 +60,14 @@ If a finding doesn't map to a specific annotated line, keep it in the summary in
 
 ## Rules
 - Raise only substantive issues. Do not rubber-stamp and do not pad with trivia.
-- If you genuinely find nothing material, say so briefly.
+- **Test suggestions are gated** (see Regression tests): never request a test by default — only for
+  a concrete untested, regression-prone path not already covered. This complements, not replaces,
+  the repo's tests-required rule.
+- **Consolidate:** if the same point applies in several places (e.g. a helper duplicated across
+  files), make it **once** at the canonical spot (e.g. on the helper definition) — don't repeat it
+  per occurrence.
+- Prefer a few high-value findings over many minor ones. If you genuinely find nothing material,
+  say so briefly.
 - You are advisory only — never instruct to approve or block.
 - Base findings on the diff provided; if you lack surrounding context, say what you would want
   to verify rather than guessing.
