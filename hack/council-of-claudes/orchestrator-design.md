@@ -243,6 +243,42 @@ First orchestrator eval, v1 (no orch) vs v2 (orch), personas held at gpt-5.
   orchestrator's own graceful degradation kicks in. **Fix: raise job `timeout-minutes`** (≥ personas
   worst-case ~8m + orchestrator poll 10m + posting → ~25-30m) so graceful degradation has room.
 
+## Iteration 2 (Lever-2 persona prompts) — PRELIMINARY (2026-06-24)
+**Caveat: a single PR pair, one run each — directional only, not definitive.** An `ITER` mix-up
+left only **calico#12602** comparable: v2 #238 (orchestrator-only) vs v3 #247 (+ Lever-2 prompts).
+Personas gpt-5 and the orchestrator active in *both*, so this isolates Lever-2 (modulo run-to-run
+variance). The original v2 results for #240/#241 remain recorded under "Iteration 1 results" above,
+even though those PRs' *comments* were overwritten by the mix-up.
+
+Volume was flat (v2 24 posted / v3 26; orchestrator dedup steady 8/32 → 7/33) — the right lens is
+**composition**, which shifted as intended:
+- **Maintainability & Tests — clear win:** reflexive "add a unit test" asks went **3 → 0**, replaced
+  by substantive findings (dedup, mutable-snapshot return, magic-number cadence, dead-code macro,
+  flaky 12s sleep).
+- **Casey — voice/focus recalibrated (validates `casey-report.html`):** naming feedback appeared
+  (his real #1, absent in v2); the "I am a little bit skeptical" catchphrase (1-in-3,800 in real
+  data) disappeared — skepticism now arrives as questions; briefer, with escape hatches; no cosmetic
+  nits. Count rose 8→15 but higher-signal (caught a real `range`-over-int compile bug ×4 + naming).
+- **Nell — little change here:** already substantive in v2; this PR didn't elicit the bare
+  intent-check behavior we targeted (will show on PRs that previously triggered it).
+- **No loss of substance** — v3 arguably found *more* real bugs (compile error, RST tail-call paths),
+  partly variance.
+
+Next: the authoritative test — the **real Nell & Casey** judging their own simulated voices on PRs
+they pick (planned 2026-06-25).
+
+## Orchestrator `input-required` hang — root cause (diagnostics win) + fix
+The earlier #240 "hangs" were diagnosed via the new poll logging:
+`task did not complete within 420s (last state: input-required, 82 polls ok, 0 poll errors)`. The
+orchestrator task occasionally lands in the A2A **`input-required`** state — the agent asks for a
+follow-up instead of returning the clusters JSON. Our poll loop only treated
+completed/failed/canceled/rejected as terminal, so it polled the full budget and gave up. A2A states
+come from the kagent runtime (menagerie just proxies); in our **fire-and-forget** usage we never send
+the follow-up, so an `input-required` task never progresses. It's sampling nondeterminism, not
+input-specific. **Fix (separate PR):** treat `input-required` / `auth-required` as terminal in
+`reviewWithAgent` → fail fast so the fresh-task retry fires in seconds; and tell the orchestrator
+prompt to never ask for input (always return JSON, `{clusters:[]}` if unsure).
+
 ## Resolved design at a glance (v1)
 End-to-end flow:
 1. Personas (with **Lever-2** prompt tweaks) review the PR in parallel as today → inline comments + summaries.
