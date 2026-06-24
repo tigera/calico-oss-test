@@ -26,7 +26,7 @@ How it works — the mode is chosen automatically:
   **earliest human review comment** and the commit it was written against (`original_commit_id`) —
   the first state humans reviewed, *before* the author addressed feedback (so the issues they
   flagged are still present). For the human-vs-Council comparison.
-- **If the PR has no human review comments** → reproduces the **full PR diff** (`base..head`) so the
+- **If the PR has no human review comments** → reproduces the **full PR diff** (`base...head`) so the
   Council can still review it — e.g. PRs picked for live human evaluation. There's no original review
   to anchor to or compare against.
 - Resolves the merge-base and the diff via the GitHub **compare API**, which works even when the
