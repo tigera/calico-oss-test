@@ -1,21 +1,39 @@
 #!/usr/bin/env python3
-"""Side-by-side review comparison for the Council of Claudes benchmark.
+"""Compare the Council of Claudes' inline comments across two iterations.
 
-Given an upstream projectcalico/calico PR number, render a markdown doc that
-puts the ORIGINAL human review comments next to the Council's comments on the
-reproduced duplicate PR (created by gen-benchmark-pr.sh, head branch
-coc-sample-<N>-head), so you can eyeball how similar/different they are.
+Given two duplicate PRs of the *same* original (e.g. a v1 without the orchestrator
+and a v2 with it), report how the Council's inline review comments changed:
+which are shared, which are only in one, overall and per persona.
 
-Usage:  ./eval-benchmark-pr.py <upstream-PR-number>
-Writes: comparison-<N>.md
+Usage:  ./eval-benchmark-pr.py <prA> <prB>
+        (PR numbers in tigera/calico-oss-test, e.g. `eval-benchmark-pr.py 218 238`)
+Writes: comparison-<prA>-vs-<prB>.md
+
+Matching is LOCATION-BASED (option A): two comments match iff they share the same
+(persona, file, line). Both PRs reproduce the same diff, so line numbers align —
+deterministic, no evaluator variance. It will (a) treat two different findings a
+persona makes on the same line as "the same", and (b) miss a finding re-anchored a
+line or two away. Semantic (LLM) matching is a planned future enhancement.
+
+Caveat: comparing two stochastic runs conflates the real change (e.g. the
+orchestrator) with gpt-5 run-to-run variance. For the orchestrator specifically,
+its own keep/drop decisions in the v2 Actions log are the cleaner signal.
 
 Calls `gh` (authenticated) for all network access, so no Python TLS setup needed.
 """
-import sys, json, subprocess
+import sys, re, json, subprocess
+from collections import Counter
 
-UP = "projectcalico/calico"
 FORK = "tigera/calico-oss-test"
-EMOJI = {"correctness": "🔎", "maintainability": "🧪", "security": "🛡️"}
+MARKER_RE = re.compile(r"council-of-claudes:inline:([\w-]+)")
+# persona key -> (display label, emoji).
+PERSONAS = {
+    "correctness": ("Correctness", "🔎"),
+    "maintainability": ("Maintainability & Tests", "🧪"),
+    "security": ("Security", "🛡️"),
+    "nelljerram": ("Nell", "🧑‍💻"),
+    "caseydavenport": ("Casey", "🧑‍🔧"),
+}
 
 
 def _gh(args):
@@ -36,82 +54,113 @@ def gh_lines(path):
             yield json.loads(ln)
 
 
-def gh_json(*args):
-    return _gh(list(args)).strip()
-
-
-def clean(body, limit=200):
-    """One-line, table-safe, truncated comment body."""
-    b = " ".join((body or "").split())
-    b = b.replace("|", "\\|")
+def clean(body, limit=160):
+    """One-line, table-safe, truncated comment body (whitespace collapsed)."""
+    b = " ".join((body or "").split()).replace("|", "\\|")
     return (b[:limit] + "…") if len(b) > limit else b
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.exit("usage: eval-benchmark-pr.py <upstream-PR-number>")
-    n = sys.argv[1]
-
-    title = gh_json("api", f"repos/{UP}/pulls/{n}", "--jq", ".title")
-
-    # --- Original: human top-level inline review comments ---
-    human = []  # {login, path, line, body}
-    for c in gh_lines(f"repos/{UP}/pulls/{n}/comments?per_page=100"):
-        if c.get("user", {}).get("type") == "User" and c.get("in_reply_to_id") is None:
-            human.append({
-                "login": c["user"]["login"], "path": c.get("path", "?"),
-                "line": c.get("line") or c.get("original_line") or 0, "body": c.get("body", ""),
-            })
-
-    # --- Duplicate PR (Council) ---
-    dup = gh_json("pr", "list", "--repo", FORK, "--head", f"coc-sample-{n}-head",
-                  "--state", "all", "--json", "number", "--jq", ".[0].number // empty")
-    council_inline, council_summaries = [], []
-    if dup:
-        for c in gh_lines(f"repos/{FORK}/pulls/{dup}/comments?per_page=100"):
-            body = c.get("body", "")
-            if "council-of-claudes:inline:" in body:
-                key = body.split("council-of-claudes:inline:")[1].split(" ")[0].strip("-> \n")
-                council_inline.append({
-                    "persona": key, "path": c.get("path", "?"),
-                    "line": c.get("line") or c.get("original_line") or 0,
-                    "body": body.split("<!--")[0].strip(),
-                })
-        for r in gh_lines(f"repos/{FORK}/pulls/{dup}/reviews?per_page=100"):
-            body = r.get("body", "")
-            if "council-of-claudes:" in body and "inline:" not in body.split("council-of-claudes:")[1][:8]:
-                key = body.split("council-of-claudes:")[1].split(" ")[0].strip("-> \n")
-                council_summaries.append({"persona": key, "body": body.split("<!--")[0].strip()})
-
-    # --- Render ---
-    files = sorted(set([h["path"] for h in human] + [c["path"] for c in council_inline]))
+def council_inline(pr):
+    """Council inline review comments on a fork PR -> [{persona, file, line, body, id}]."""
     out = []
-    out.append(f"# Review comparison — [{UP}#{n}](https://github.com/{UP}/pull/{n})")
-    out.append(f"\n**{title.strip()}**\n")
-    dup_txt = f"[duplicate PR #{dup}](https://github.com/{FORK}/pull/{dup})" if dup else "_(no duplicate PR found yet — run `gen-benchmark-pr.sh "+n+"` first)_"
-    out.append(f"- 👤 Human (original): **{len(human)}** top-level inline comments")
-    out.append(f"- 🤖 Council (duplicate): **{len(council_inline)}** inline + **{len(council_summaries)}** persona summaries — {dup_txt}\n")
+    for c in gh_lines(f"repos/{FORK}/pulls/{pr}/comments?per_page=100"):
+        # Only count comments actually authored by the Council bot — a human reply
+        # that merely quotes a marker must not be tallied as Council output.
+        if c.get("user", {}).get("type") != "Bot":
+            continue
+        body = c.get("body", "")
+        m = MARKER_RE.search(body)
+        if not m:
+            continue
+        # Drop the hidden marker and the "<badge> **Persona** — " prefix; keep the
+        # human-facing text (label() re-adds the persona, so the prefix is redundant).
+        text = body.split("<!--", 1)[0]
+        if "—" in text:
+            text = text.split("—", 1)[1]
+        out.append({
+            "persona": m.group(1), "file": c.get("path", "?"),
+            "line": c.get("line") or c.get("original_line") or 0,
+            "body": text.strip(), "id": c.get("id"),
+        })
+    return out
 
-    out.append("## Inline comments by file\n")
-    out.append("| File | 👤 Human (original) | 🤖 Council (duplicate) |")
-    out.append("|---|---|---|")
-    for f in files:
-        h_cell = "<br>".join(f"`L{h['line']}` (@{h['login']}) {clean(h['body'])}"
-                             for h in sorted([x for x in human if x["path"] == f], key=lambda x: x["line"])) or "—"
-        c_cell = "<br>".join(f"`L{c['line']}` {EMOJI.get(c['persona'],'🤖')} {clean(c['body'].split('—',1)[-1].strip())}"
-                             for c in sorted([x for x in council_inline if x["path"] == f], key=lambda x: x["line"])) or "—"
-        out.append(f"| `{f}` | {h_cell} | {c_cell} |")
 
-    if council_summaries:
-        out.append("\n## Council persona summaries (whole-PR)\n")
-        for s in council_summaries:
-            verdict = next((l for l in s["body"].splitlines() if l.strip() and not l.startswith("#") and not l.startswith(">")), "")
-            out.append(f"- {EMOJI.get(s['persona'],'🤖')} **{s['persona']}**: {clean(verdict, 240)}")
+def label(persona):
+    name, emoji = PERSONAS.get(persona, (persona, "🤖"))
+    return f"{emoji} {name}"
 
-    path = f"comparison-{n}.md"
+
+def main():
+    if len(sys.argv) != 3 or not all(a.isdigit() for a in sys.argv[1:3]):
+        sys.exit("usage: eval-benchmark-pr.py <prA> <prB>   (e.g. eval-benchmark-pr.py 218 238)")
+    prA, prB = sys.argv[1], sys.argv[2]
+
+    A = council_inline(prA)
+    B = council_inline(prB)
+
+    # Location-based key. Counters handle the (rare) case of a persona posting
+    # multiple comments on the same line.
+    def keys(rows):
+        return Counter((r["persona"], r["file"], r["line"]) for r in rows)
+    kA, kB = keys(A), keys(B)
+
+    all_personas = sorted({r["persona"] for r in A + B} | set(PERSONAS),
+                          key=lambda p: list(PERSONAS).index(p) if p in PERSONAS else 99)
+
+    def tally(ka, kb, persona=None):
+        union = set(ka) | set(kb)
+        if persona is not None:
+            union = {k for k in union if k[0] == persona}
+        shared = sum(min(ka[k], kb[k]) for k in union)
+        only_a = sum(max(ka[k] - kb[k], 0) for k in union)
+        only_b = sum(max(kb[k] - ka[k], 0) for k in union)
+        return shared, only_a, only_b
+
+    # --- render ---
+    out = []
+    out.append(f"# Council comparison — PR #{prA} (A) vs PR #{prB} (B)")
+    out.append(f"\n- A: https://github.com/{FORK}/pull/{prA}")
+    out.append(f"- B: https://github.com/{FORK}/pull/{prB}")
+    out.append("\n_Matching is location-based: same (persona, file, line). See script header for caveats._\n")
+
+    out.append("## Summary (inline comments)\n")
+    out.append("| Persona | Total A | Total B | Δ | Shared | Only A | Only B |")
+    out.append("|---|--:|--:|--:|--:|--:|--:|")
+    sh, oa, ob = tally(kA, kB)
+    ta, tb = len(A), len(B)
+    out.append(f"| **All** | **{ta}** | **{tb}** | **{tb - ta:+d}** | **{sh}** | **{oa}** | **{ob}** |")
+    for p in all_personas:
+        pa = sum(1 for r in A if r["persona"] == p)
+        pb = sum(1 for r in B if r["persona"] == p)
+        if pa == 0 and pb == 0:
+            continue
+        psh, poa, pob = tally(kA, kB, p)
+        out.append(f"| {label(p)} | {pa} | {pb} | {pb - pa:+d} | {psh} | {poa} | {pob} |")
+
+    # Detail: what changed (supports human good/bad labeling of just the delta).
+    def detail(rows, ka, kb, header):
+        out.append(f"\n## {header}\n")
+        delta = ka - kb  # Counter subtraction: only positive counts = exact unmatched multiplicity
+        if not delta:
+            out.append("_(none)_")
+            return
+        by_key = {}
+        for r in sorted(rows, key=lambda r: (r["persona"], r["file"], r["line"], r["id"] or 0)):
+            by_key.setdefault((r["persona"], r["file"], r["line"]), []).append(r)
+        for k in sorted(delta, key=lambda k: (k[0], k[1], k[2])):
+            for r in by_key.get(k, [])[:delta[k]]:  # emit exactly the unmatched count for this key
+                out.append(f"- {label(r['persona'])} `{r['file']}:{r['line']}` — {clean(r['body'])}")
+
+    detail(A, kA, kB, f"Only in A (#{prA}) — present in A, absent in B")
+    detail(B, kB, kA, f"Only in B (#{prB}) — present in B, absent in A")
+
+    path = f"comparison-{prA}-vs-{prB}.md"
     with open(path, "w") as fh:
         fh.write("\n".join(out) + "\n")
-    print(f"Wrote {path}  ({len(human)} human, {len(council_inline)} Council inline, {len(council_summaries)} summaries)")
+
+    print(f"Wrote {path}")
+    print(f"  A #{prA}: {ta} inline | B #{prB}: {tb} inline | Δ {tb - ta:+d}")
+    print(f"  shared {sh} | only-A {oa} | only-B {ob}")
 
 
 if __name__ == "__main__":
