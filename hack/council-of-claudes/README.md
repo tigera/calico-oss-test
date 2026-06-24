@@ -13,18 +13,22 @@ documented in [`orchestrator-design.md`](./orchestrator-design.md).
 ## Tools
 
 ### `gen-benchmark-pr.sh <upstream-PR-number>`
-Reproduces a `projectcalico/calico` PR's **as-first-reviewed** state as a duplicate PR in
-`tigera/calico-oss-test`, which triggers the Council workflow.
+Reproduces a `projectcalico/calico` PR as a duplicate PR in `tigera/calico-oss-test`, which triggers
+the Council workflow.
 
 ```sh
 ./hack/council-of-claudes/gen-benchmark-pr.sh 12345
 DRY_RUN=1 ./hack/council-of-claudes/gen-benchmark-pr.sh 12345   # build & verify locally; no push / no PR
 ```
 
-How it works:
-- Finds the **earliest human review comment** and the commit it was written against
-  (`original_commit_id`) — i.e. the first state humans reviewed, *before* the author addressed
-  feedback (so the issues they flagged are still present).
+How it works — the mode is chosen automatically:
+- **If the PR has human review comments** → reproduces the **as-first-reviewed** state: finds the
+  **earliest human review comment** and the commit it was written against (`original_commit_id`) —
+  the first state humans reviewed, *before* the author addressed feedback (so the issues they
+  flagged are still present). For the human-vs-Council comparison.
+- **If the PR has no human review comments** → reproduces the **full PR diff** (`base..head`) so the
+  Council can still review it — e.g. PRs picked for live human evaluation. There's no original review
+  to anchor to or compare against.
 - Resolves the merge-base and the diff via the GitHub **compare API**, which works even when the
   PR was force-pushed and that commit is now dangling/unfetchable by `git`.
 - Opens the duplicate as `coc-sample-<N>-base` → `coc-sample-<N>-head`, so the PR diff equals
@@ -52,5 +56,6 @@ Writes `comparison-<N>.md`: a side-by-side of the **original human** review comm
   `gen-benchmark-pr.sh` resolves whichever remote targets the fork and pushes/overlays via it.
 
 ## Notes
-- The **as-first-reviewed methodology** is described under `gen-benchmark-pr.sh` above.
+- The **reproduction modes** (as-first-reviewed vs. full-diff) are described under
+  `gen-benchmark-pr.sh` above.
 - These reproduce PRs against this **fork** (`calico-oss-test`), never upstream.
