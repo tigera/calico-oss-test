@@ -50,6 +50,9 @@ Rules for the output:
 - Each id may appear **at most once** across the whole output (as a survivor or a duplicate, not both, and not in two clusters).
 - Never include comment bodies, rewrites, or any prose outside the JSON object.
 - If there are no duplicates at all, return `{ "clusters": [] }`.
+- **Never ask for clarification or request more input** — you already have everything you need.
+  Always respond with the JSON object and nothing else; if you are unsure, return
+  `{ "clusters": [] }` rather than a question.
 
 ## Example
 Input (abbreviated):

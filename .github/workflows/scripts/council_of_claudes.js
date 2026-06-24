@@ -242,6 +242,14 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId, ma
       core.warning(`${title}: task ${state}`);
       return null;
     }
+    if (state === 'input-required' || state === 'auth-required') {
+      // The agent is awaiting client follow-up we never send (fire-and-forget),
+      // so this task will never progress. Abandon now (return null) so the caller
+      // can resubmit a fresh task instead of polling the full budget. This is the
+      // root cause behind the earlier orchestrator "hangs".
+      core.warning(`${title}: task ${state} (agent awaiting client input we don't provide) — abandoning`);
+      return null;
+    }
   }
   core.warning(`${title}: task did not complete within ${maxPollMs / 1000}s ` +
     `(last state: ${lastState}, ${polls} polls ok, ${pollErrs} poll errors)`);
