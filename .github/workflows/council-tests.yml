@@ -1,0 +1,27 @@
+# Council of Claudes — unit tests for the review logic (council_of_claudes.js).
+#
+# calico-oss-test ONLY. This guards the Council logic during development in this
+# fork; it is deliberately NOT cherry-picked upstream. The Council *product* (the
+# review workflow + persona prompts + orchestrator) is upstreamed; the dev/test
+# scaffolding (this workflow, the test file, hack/council-of-claudes/*) stays here.
+# See hack/council-of-claudes/README.md → "Upstream vs. calico-oss-test only".
+name: Council of Claudes tests
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/scripts/**'
+      - '.github/workflows/council-tests.yml'
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # Uses the runner's preinstalled Node (node:test is stable on Node 20+);
+      # no setup-node / dependencies needed.
+      - name: Run Council unit tests
+        run: node --test .github/workflows/scripts/*.test.js
