@@ -235,11 +235,25 @@ async function reviewWithAgent({ core, title, url, token, messageText, msgId, ma
       core.info(`  ${title}: poll error (${safe(errDetail(e))}), will retry`);
       continue;
     }
-    const state = task?.status?.state;
+    // Normalize so we're robust to casing / underscore variants from the runtime
+    // (A2A uses hyphenated lowercase, e.g. "input-required").
+    const state = (task?.status?.state || '').toLowerCase().replace(/_/g, '-');
     if (state) lastState = state;
     if (state === 'completed') return stripOuterFence(extractText(task));
+    // Terminal failure states: the task won't produce a result.
     if (state === 'failed' || state === 'canceled' || state === 'rejected') {
       core.warning(`${title}: task ${state}`);
+      return null;
+    }
+    // Interrupted states: the agent is waiting for a client follow-up we never
+    // send (fire-and-forget), so the task can't progress. Abandon now (return
+    // null) so the caller can resubmit a fresh task instead of polling the full
+    // budget. (Root cause behind the earlier orchestrator "hangs".)
+    if (state === 'input-required' || state === 'auth-required') {
+      const why = state === 'auth-required'
+        ? 'authentication problem; check the agent token/credentials'
+        : 'agent awaiting client input we never send';
+      core.warning(`${title}: task ${state} (${why}); abandoning early`);
       return null;
     }
   }
