@@ -545,3 +545,10 @@ module.exports = async ({ github, context, core }) => {
   }
   core.info(`Done: ${summaries}/${active.length} summaries, ${inlineTotal} inline posted, ${dropped} duplicate(s) dropped on PR #${pull_number}`);
 };
+
+// Expose the pure helpers for unit tests (council_of_claudes.test.js). The default
+// export above stays the github-script entrypoint (`await fn({github,context,core})`);
+// these are attached as properties on it, so the entrypoint is unaffected.
+Object.assign(module.exports, {
+  annotateDiff, parseFindings, parseClusters, applyClusters, stripOuterFence, errDetail,
+});
