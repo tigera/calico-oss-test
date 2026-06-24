@@ -327,23 +327,31 @@ async function orchestrateDedup({ core, allInline }) {
       `Here are ${allInline.length} inline review comments from one pull request, as a JSON array. ` +
       `Identify redundant duplicate groups and return the clusters JSON per your instructions.\n\n${payload}`;
 
-    // Up to ORCH_ATTEMPTS, each a *fresh* task (distinct msgId), bounded by
-    // ORCH_POLL_MS — so a task that hangs server-side gets a second shot.
-    let out = null;
-    for (let attempt = 1; attempt <= ORCH_ATTEMPTS && !out; attempt++) {
-      const msgId = `council-orchestrator-${process.env.GITHUB_RUN_ID}-${attempt}`;
-      out = await reviewWithAgent({
+    // Up to ORCH_ATTEMPTS, each a *fresh* task bounded by ORCH_POLL_MS — so a
+    // task that hangs server-side OR returns garbled output gets a second shot.
+    const runKey = `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT || '1'}`;
+    for (let attempt = 1; attempt <= ORCH_ATTEMPTS; attempt++) {
+      // RUN_ATTEMPT + per-attempt suffix → a distinct msgId (hence a fresh
+      // server-side task) on every submission, including GitHub "Re-run" re-runs.
+      const msgId = `council-orchestrator-${runKey}-${attempt}`;
+      const out = await reviewWithAgent({
         core, title: `Orchestrator (attempt ${attempt}/${ORCH_ATTEMPTS})`,
         url, token, messageText, msgId, maxPollMs: ORCH_POLL_MS,
       });
-      if (!out && attempt < ORCH_ATTEMPTS) {
-        core.warning(`Orchestrator: attempt ${attempt} produced no response — resubmitting a fresh task`);
+      const last = attempt === ORCH_ATTEMPTS;
+      if (!out) {
+        if (!last) core.info('Orchestrator: no response — resubmitting a fresh task');
+        continue;
       }
+      const parsed = parseClusters(out);
+      if (!parsed) {
+        if (!last) core.info('Orchestrator: unparseable response — resubmitting a fresh task');
+        continue;
+      }
+      return applyClusters({ core, allInline, parsed });
     }
-    if (!out) { core.warning('Orchestrator: no response after retries — posting all comments unfiltered'); return empty; }
-    const parsed = parseClusters(out);
-    if (!parsed) { core.warning('Orchestrator: unparseable response — posting all comments unfiltered'); return empty; }
-    return applyClusters({ core, allInline, parsed });
+    core.warning('Orchestrator: no usable response after retries — posting all comments unfiltered');
+    return empty;
   } catch (e) {
     core.warning(`Orchestrator: unexpected error (${safe(errDetail(e))}) — posting all comments unfiltered`);
     return empty;
@@ -408,7 +416,9 @@ module.exports = async ({ github, context, core }) => {
   // 3. Fan out to all configured personas in parallel; isolate failures.
   core.info(`Reviewing PR #${pull_number} with ${active.length} persona(s): ${active.map(p => p.title).join(', ')}`);
   const results = await Promise.all(active.map(async p => {
-    const msgId = `council-${p.key}-${pull_number}-${process.env.GITHUB_RUN_ID}`;
+    // Include RUN_ATTEMPT so a GitHub "Re-run" gets a fresh server-side task (the
+    // run id alone is stable across re-runs and could return a stale cached task).
+    const msgId = `council-${p.key}-${pull_number}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT || '1'}`;
     const review = await reviewWithAgent({ core, title: p.title, url: p.url, token: p.token, messageText, msgId });
     if (!review) {
       core.warning(`${p.title}: no review produced, skipping`);
