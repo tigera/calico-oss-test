@@ -59,3 +59,43 @@ Writes `comparison-<N>.md`: a side-by-side of the **original human** review comm
 - The **reproduction modes** (as-first-reviewed vs. full-diff) are described under
   `gen-benchmark-pr.sh` above.
 - These reproduce PRs against this **fork** (`calico-oss-test`), never upstream.
+
+## Tests
+Unit tests for the Council review logic live next to the script:
+`.github/workflows/scripts/council_of_claudes.test.js`. Run them with:
+```sh
+node --test .github/workflows/scripts/*.test.js
+```
+Zero dependencies (Node's built-in `node:test` runner, Node 20+). CI runs them on PRs that touch
+`.github/workflows/scripts/**` via `.github/workflows/council-tests.yml`.
+
+## Upstream vs. calico-oss-test only
+The Council has two kinds of artifact. Be deliberate about the boundary when cherry-picking.
+
+**Product → cherry-picked upstream to `projectcalico/calico`** (it runs live and reviews real PRs):
+- `.github/workflows/council_of_claudes.yml` (the review workflow)
+- `.github/workflows/scripts/council_of_claudes.js` (orchestration + dedup logic)
+- `.github/workflows/scripts/personas/*.md`, `.github/workflows/scripts/orchestrator.md` (agent prompts)
+
+**Dev / test / benchmark scaffolding → stays in `calico-oss-test` only** (never cherry-picked):
+- `hack/council-of-claudes/**` (this dir: `gen-benchmark-pr.sh`, `eval-benchmark-pr.py`, design docs, README)
+- `.github/workflows/scripts/council_of_claudes.test.js` (unit tests)
+- `.github/workflows/council-tests.yml` (test CI)
+
+Keep these in separate commits from product changes so a product cherry-pick naturally leaves the
+scaffolding behind.
+
+### Sync practices (keeping the round-trip conflict-free)
+Council changes start here → are cherry-picked upstream → then flow back when `calico-oss-test` pulls
+from upstream. To keep that low-conflict:
+- **Sync from upstream frequently** — small, frequent merges converge cleanly; large divergence is
+  where conflicts pile up.
+- **Use *merge*, not *rebase*, for the upstream sync** — rebasing would replay Council commits that
+  upstream already has (via cherry-pick) → empty/conflicting picks; a merge lets identical content
+  converge with no conflict.
+- **Keep cherry-picks content-identical** (don't tweak the code during the upstream PR) so the
+  returning copy converges with the local one.
+- **Don't re-edit an already-upstreamed product file independently here** — once it's upstream, let
+  it come from upstream; make the next change a fresh branch → upstream cycle.
+
+The scaffolding above has no upstream counterpart, so it never conflicts with an upstream sync.
