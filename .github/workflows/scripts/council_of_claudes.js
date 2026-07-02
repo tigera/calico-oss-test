@@ -550,5 +550,5 @@ module.exports = async ({ github, context, core }) => {
 // export above stays the github-script entrypoint (`await fn({github,context,core})`);
 // these are attached as properties on it, so the entrypoint is unaffected.
 Object.assign(module.exports, {
-  annotateDiff, parseFindings, parseClusters, applyClusters, stripOuterFence, errDetail,
+  annotateDiff, parseFindings, parseClusters, applyClusters, stripOuterFence,
 });

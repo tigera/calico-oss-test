@@ -7,8 +7,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 
-const coc = require(path.join(__dirname, 'council_of_claudes.js'));
-const { annotateDiff, parseFindings, parseClusters, applyClusters, stripOuterFence } = coc;
+const council = require(path.join(__dirname, 'council_of_claudes.js'));
+const { annotateDiff, parseFindings, parseClusters, applyClusters, stripOuterFence } = council;
 
 // ----------------------------------------------------------------------------
 // Pure helpers
@@ -103,24 +103,37 @@ function makeFetch(orchOutcomes) {
   };
 }
 
+// Env keys the harness mutates — snapshot/restore so the suite stays hermetic.
+const ENV_KEYS = [
+  'CORRECTNESS_AGENT_URL', 'CORRECTNESS_AGENT_TOKEN', 'MAINTAINABILITY_AGENT_URL', 'MAINTAINABILITY_AGENT_TOKEN',
+  'SECURITY_AGENT_URL', 'SECURITY_AGENT_TOKEN', 'NELLJERRAM_AGENT_URL', 'NELLJERRAM_AGENT_TOKEN',
+  'CASEYDAVENPORT_AGENT_URL', 'CASEYDAVENPORT_AGENT_TOKEN', 'ORCHESTRATOR_AGENT_URL', 'ORCHESTRATOR_AGENT_TOKEN',
+  'GITHUB_WORKSPACE', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
+];
+
 async function runCouncil({ orchConfigured, orchOutcomes }) {
-  for (const k of ['CORRECTNESS', 'MAINTAINABILITY', 'SECURITY', 'NELLJERRAM', 'CASEYDAVENPORT', 'ORCHESTRATOR']) {
-    delete process.env[`${k}_AGENT_URL`]; delete process.env[`${k}_AGENT_TOKEN`];
+  const prevEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]));
+  const prevFetch = global.fetch;
+  try {
+    for (const k of ENV_KEYS) delete process.env[k];
+    process.env.CORRECTNESS_AGENT_URL = CORR; process.env.CORRECTNESS_AGENT_TOKEN = 't';
+    process.env.NELLJERRAM_AGENT_URL = NELL; process.env.NELLJERRAM_AGENT_TOKEN = 't';
+    if (orchConfigured) { process.env.ORCHESTRATOR_AGENT_URL = ORCH; process.env.ORCHESTRATOR_AGENT_TOKEN = 't'; }
+    process.env.GITHUB_WORKSPACE = '/tmp/coc-nonexistent'; process.env.GITHUB_RUN_ID = '1'; process.env.GITHUB_RUN_ATTEMPT = '1';
+    global.fetch = makeFetch(orchOutcomes);
+    const posted = [];
+    const github = { paginate: async () => [], rest: { pulls: {
+      get: async () => ({ data: DIFF }), listReviews: () => {}, listReviewComments: () => {},
+      createReviewComment: async (a) => { posted.push(`${a.path}:${a.line}`); },
+      deleteReviewComment: async () => {}, createReview: async () => {}, updateReview: async () => {},
+    } } };
+    const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 1, title: 't', body: 'b', head: { sha: 's' } } } };
+    await council({ github, context, core: { info() {}, warning() {} } });
+    return posted.sort();
+  } finally {
+    for (const k of ENV_KEYS) { if (prevEnv[k] === undefined) delete process.env[k]; else process.env[k] = prevEnv[k]; }
+    global.fetch = prevFetch;
   }
-  process.env.CORRECTNESS_AGENT_URL = CORR; process.env.CORRECTNESS_AGENT_TOKEN = 't';
-  process.env.NELLJERRAM_AGENT_URL = NELL; process.env.NELLJERRAM_AGENT_TOKEN = 't';
-  if (orchConfigured) { process.env.ORCHESTRATOR_AGENT_URL = ORCH; process.env.ORCHESTRATOR_AGENT_TOKEN = 't'; }
-  process.env.GITHUB_WORKSPACE = '/tmp/coc-nonexistent'; process.env.GITHUB_RUN_ID = '1'; process.env.GITHUB_RUN_ATTEMPT = '1';
-  global.fetch = makeFetch(orchOutcomes);
-  const posted = [];
-  const github = { paginate: async () => [], rest: { pulls: {
-    get: async () => ({ data: DIFF }), listReviews: () => {}, listReviewComments: () => {},
-    createReviewComment: async (a) => { posted.push(`${a.path}:${a.line}`); },
-    deleteReviewComment: async () => {}, createReview: async () => {}, updateReview: async () => {},
-  } } };
-  const context = { repo: { owner: 'o', repo: 'r' }, payload: { pull_request: { number: 1, title: 't', body: 'b', head: { sha: 's' } } } };
-  await coc({ github, context, core: { info() {}, warning() {} } });
-  return posted.sort();
 }
 
 test('e2e: orchestrator dedups the cross-persona duplicate', async () => {
@@ -131,6 +144,11 @@ test('e2e: orchestrator dedups the cross-persona duplicate', async () => {
 test('e2e: input-required is terminal -> fresh-task retry recovers', async () => {
   const posted = await runCouncil({ orchConfigured: true, orchOutcomes: ['input-required', 'good'] });
   assert.deepEqual(posted, ['foo.go:10', 'foo.go:20', 'foo.go:30']);
+});
+
+test('e2e: orchestrator configured but all attempts fail -> graceful, post everything', async () => {
+  const posted = await runCouncil({ orchConfigured: true, orchOutcomes: ['failed', 'failed'] });
+  assert.deepEqual(posted, ['foo.go:10', 'foo.go:10', 'foo.go:20', 'foo.go:30']); // no dedup applied
 });
 
 test('e2e: orchestrator unconfigured -> graceful, post everything', async () => {
