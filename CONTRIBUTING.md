@@ -1,4 +1,4 @@
-# Contributing to Project Calico
+# Contributing to Project Calico (OSS)
 
 Welcome! Project Calico is a community-driven open source networking project under the CNCF, with a wide contributor base across many organisations. This guide explains how to contribute code, file issues, and propose features. Please read it through carefully before submitting your first pull request -- a small amount of upfront alignment makes review much faster for everyone.
 
