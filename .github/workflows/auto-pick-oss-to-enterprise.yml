@@ -78,6 +78,7 @@ jobs:
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
             --max-turns 80
+            --model claude-sonnet-4-6
           prompt: |
             You are automating an OSS -> Enterprise cherry-pick.
 
