@@ -68,7 +68,7 @@ jobs:
           OSS_REPO: ${{ github.repository }}
           CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_TOKEN }}
           # Point the action's own GitHub calls at the Enterprise repo via the
           # same bot PAT.
           github_token: ${{ secrets.MARVIN_RENOVATE_PAT }}
