@@ -8,10 +8,11 @@
 #
 # Auth model:
 #   - claude_code_oauth_token : drives the Claude Code action.
-#   - CET_TOKEN (a GitHub App token scoped to calico-enterprise-test) lets this
-#     run push a branch and open a PR in that other repo.
+#   - CET_TOKEN (secrets.MARVIN_RENOVATE_PAT, the marvin-tigera bot PAT) lets
+#     this run push a branch and open a PR in the Enterprise repo. The default
+#     GITHUB_TOKEN is scoped to calico-oss-test only and cannot reach it.
 #   - OSS_TOKEN (the default GITHUB_TOKEN) is used only to comment back on the
-#     source PR here in calico-oss-test; it cannot reach the Enterprise repo.
+#     source PR here in calico-oss-test.
 #
 # The source PR's untrusted title/body are passed via env vars (PR_TITLE /
 # PR_BODY), never interpolated into the prompt, to avoid prompt injection.
@@ -41,15 +42,6 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Mint a token scoped to calico-enterprise-test
-        id: cet-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ vars.CET_APP_ID }}
-          private-key: ${{ secrets.CET_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: calico-enterprise-test
-
       - name: Checkout OSS repo (source of the merged commit)
         uses: actions/checkout@v4
         with:
@@ -59,7 +51,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         env:
           # Talks to calico-enterprise-test (clone / push / open PR).
-          CET_TOKEN: ${{ steps.cet-token.outputs.token }}
+          # marvin-tigera has write on the Enterprise repo; reuse its PAT
+          # rather than minting a bespoke token. In prod this is the same bot
+          # that already reaches tigera/calico-private.
+          CET_TOKEN: ${{ secrets.MARVIN_RENOVATE_PAT }}
           # Talks to this OSS repo only (comment back on the source PR).
           OSS_TOKEN: ${{ github.token }}
           # Merged-PR facts. Number/SHA/URL are safe formats and could be
@@ -74,9 +69,9 @@ jobs:
           CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Give the action the App token so its own GitHub calls target the
-          # Enterprise repo.
-          github_token: ${{ steps.cet-token.outputs.token }}
+          # Point the action's own GitHub calls at the Enterprise repo via the
+          # same bot PAT.
+          github_token: ${{ secrets.MARVIN_RENOVATE_PAT }}
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
             --max-turns 80
