@@ -28,6 +28,10 @@ permissions:
   contents: read
   # Lets the default token comment on the source PR to surface pick failures.
   pull-requests: write
+  # Required by anthropics/claude-code-action@v1 for its OIDC token exchange;
+  # without it the action's org verification fails ("unable to verify
+  # organization for the current authentication token").
+  id-token: write
 
 # One in-flight pick per source PR. Do not cancel a running pick (a half-done
 # cherry-pick/push should finish); queue re-runs instead. Different PRs still
