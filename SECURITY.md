@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-The Project Calico community supports the most recent three minor
+The Project Calico community supports the most recent four minor
 versions on a rolling basis. Older versions receive security-only
 patches at the maintainers' discretion. The current support window is
 documented in the release notes for each minor release on
