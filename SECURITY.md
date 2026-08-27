@@ -2,11 +2,11 @@
 
 ## Supported Versions
 
-The Project Calico community supports the most recent four minor
-versions on a rolling basis. Older versions receive security-only
-patches at the maintainers' discretion. The current support window is
-documented in the release notes for each minor release on
-https://docs.tigera.io/calico/latest/release-notes/.
+Project Calico follows an N-2 support model driven by the release
+cadence: the latest release and the two preceding minor lines receive
+fixes, and end-of-life dates are published per-release in the security
+advisories feed. Backports outside that window require a maintainer
+sponsor and a documented CVE.
 
 ## Reporting a Vulnerability
 
