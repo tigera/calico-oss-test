@@ -69,9 +69,12 @@ jobs:
           CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_TOKEN }}
-          # Point the action's own GitHub calls at the Enterprise repo via the
-          # same bot PAT.
-          github_token: ${{ secrets.MARVIN_RENOVATE_PAT }}
+          # The action uses github_token for its own framework calls on THIS
+          # repo (actor permission check, tracking comment) -- so it must be the
+          # default token, which can read calico-oss-test. The cross-repo push
+          # to the Enterprise repo is done by Claude in Bash with $CET_TOKEN
+          # (the marvin PAT), not through this input.
+          github_token: ${{ github.token }}
           claude_args: |
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
             --max-turns 80
