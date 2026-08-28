@@ -55,7 +55,7 @@ jobs:
       # rather than letting Claude swallow the failure and report "success".
       - name: Preflight - verify cross-repo token reaches Enterprise
         env:
-          CET_TOKEN: ${{ secrets.CALI_BOT_PAT }}
+          CET_TOKEN: ${{ secrets.TEST_GH_TOKEN_CLASSIC }}
           CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
         run: |
           echo "CET_TOKEN length: ${#CET_TOKEN}"
@@ -76,7 +76,7 @@ jobs:
           # marvin-tigera has write on the Enterprise repo; reuse its PAT
           # rather than minting a bespoke token. In prod this is the same bot
           # that already reaches tigera/calico-private.
-          CET_TOKEN: ${{ secrets.CALI_BOT_PAT }}
+          CET_TOKEN: ${{ secrets.TEST_GH_TOKEN_CLASSIC }}
           # Talks to this OSS repo only (comment back on the source PR).
           OSS_TOKEN: ${{ github.token }}
           # Merged-PR facts. Number/SHA/URL are safe formats and could be
