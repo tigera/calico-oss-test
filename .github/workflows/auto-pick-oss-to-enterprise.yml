@@ -72,7 +72,11 @@ jobs:
           OSS_REPO: ${{ github.repository }}
           CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_TOKEN }}
+          # Org-issued Anthropic API key (from the tigera-dev workspace on
+          # platform.claude.com). Not device-bound, so it authenticates in CI,
+          # unlike a Team-seat setup-token. Secret is named CLAUDE_TOKEN but
+          # holds an sk-ant-api... key.
+          anthropic_api_key: ${{ secrets.CLAUDE_TOKEN }}
           # The action uses github_token for its own framework calls on THIS
           # repo (actor permission check, tracking comment) -- so it must be the
           # default token, which can read calico-oss-test. The cross-repo push
