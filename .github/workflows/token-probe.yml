@@ -1,0 +1,30 @@
+# Throwaway diagnostic: which repo secret can reach calico-enterprise-test?
+# Delete after use.
+name: Token probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
+      T_SYNC: ${{ secrets.CALICO_SYNC_TOKEN }}
+      T_CALI: ${{ secrets.CALI_BOT_PAT }}
+      T_MARVIN: ${{ secrets.MARVIN_RENOVATE_PAT }}
+    steps:
+      - name: Probe each token
+        run: |
+          check () {
+            local name="$1" tok="$2"
+            if [ -z "$tok" ]; then echo "$name: (not set)"; return; fi
+            if git ls-remote "https://x-access-token:${tok}@github.com/${CET_REPO}.git" HEAD >/dev/null 2>&1; then
+              echo "$name: OK - can reach ${CET_REPO}"
+            else
+              echo "$name: FAIL - cannot reach ${CET_REPO}"
+            fi
+          }
+          check CALICO_SYNC_TOKEN "$T_SYNC"
+          check CALI_BOT_PAT      "$T_CALI"
+          check MARVIN_RENOVATE_PAT "$T_MARVIN"
