@@ -1,6 +1,6 @@
 # Contributing to the Calico Codebase (OSS)
 
-Welcome! Project Calico is a community-driven open source networking project under the CNCF, with a wide contributor base across many organisations. This guide explains how to contribute code, file issues, and propose features. Please read it through carefully before submitting your first pull request -- a small amount of upfront alignment makes review much faster for everyone.
+Welcome! Project Calico is a community-driven open source networking project under the CNCF, with a wide contributor base across many organisations. This guide explains how to contribute code, file issues, propose features, and report security vulnerabilities responsibly. Please read it through carefully before submitting your first pull request -- a small amount of upfront alignment makes review much faster for everyone.
 
 All commits must be signed off under the Developer Certificate of Origin (DCO): use `git commit -s`. Pull requests with unsigned commits will not be merged.
 
