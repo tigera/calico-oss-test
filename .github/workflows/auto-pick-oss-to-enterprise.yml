@@ -58,6 +58,10 @@ jobs:
           CET_TOKEN: ${{ secrets.CALI_BOT_PAT }}
           CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
         run: |
+          echo "CET_TOKEN length: ${#CET_TOKEN}"
+          echo "--- ls-remote output ---"
+          git ls-remote "https://x-access-token:${CET_TOKEN}@github.com/${CET_REPO}.git" HEAD 2>&1 | head -5 || true
+          echo "------------------------"
           if git ls-remote "https://x-access-token:${CET_TOKEN}@github.com/${CET_REPO}.git" HEAD >/dev/null 2>&1; then
             echo "OK: token can reach ${CET_REPO}"
           else
