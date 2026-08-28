@@ -114,7 +114,7 @@ jobs:
       - name: Claude resolves the conflict
         id: claude
         if: steps.pick.outputs.outcome == 'conflict'
-        uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
+        uses: anthropics/claude-code-action@v1
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_TOKEN }}
