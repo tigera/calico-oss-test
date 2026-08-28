@@ -51,6 +51,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Fail loudly here if the cross-repo token cannot reach Enterprise,
+      # rather than letting Claude swallow the failure and report "success".
+      - name: Preflight - verify cross-repo token reaches Enterprise
+        env:
+          CET_TOKEN: ${{ secrets.CALI_BOT_PAT }}
+          CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
+        run: |
+          if git ls-remote "https://x-access-token:${CET_TOKEN}@github.com/${CET_REPO}.git" HEAD >/dev/null 2>&1; then
+            echo "OK: token can reach ${CET_REPO}"
+          else
+            echo "FAIL: token cannot reach ${CET_REPO}"
+            exit 1
+          fi
+
       - name: Cherry-pick into Enterprise via Claude
         uses: anthropics/claude-code-action@v1
         env:
@@ -58,7 +72,7 @@ jobs:
           # marvin-tigera has write on the Enterprise repo; reuse its PAT
           # rather than minting a bespoke token. In prod this is the same bot
           # that already reaches tigera/calico-private.
-          CET_TOKEN: ${{ secrets.MARVIN_RENOVATE_PAT }}
+          CET_TOKEN: ${{ secrets.CALI_BOT_PAT }}
           # Talks to this OSS repo only (comment back on the source PR).
           OSS_TOKEN: ${{ github.token }}
           # Merged-PR facts. Number/SHA/URL are safe formats and could be
