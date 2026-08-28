@@ -161,8 +161,18 @@ jobs:
             echo "Cherry-pick still in progress; not completed."
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if grep -rIlE '^(<<<<<<< |>>>>>>> |=======$)' --exclude-dir=.git . >/dev/null 2>&1; then
-            echo "Conflict markers remain."
+          # Only inspect files this pick actually changed, and only for the
+          # angle-bracket markers (<<<<<<< / >>>>>>>), which never occur in
+          # legitimate content. (======= alone appears in real docs, so it is
+          # not a reliable signal on its own.)
+          markers=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            if grep -qE '^(<<<<<<<|>>>>>>>)' "$f"; then
+              echo "Conflict markers remain in: $f"; markers=1; break
+            fi
+          done < <(git diff --name-only origin/master..HEAD)
+          if [ "$markers" = "1" ]; then
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ -n "$(git log origin/master..HEAD --oneline 2>/dev/null)" ]; then
