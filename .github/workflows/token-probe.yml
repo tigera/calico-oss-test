@@ -19,6 +19,7 @@ jobs:
           check () {
             local name="$1" tok="$2"
             if [ -z "$tok" ]; then echo "$name: (not set)"; return; fi
+    echo "$name: length ${#tok}"
             if git ls-remote "https://x-access-token:${tok}@github.com/${CET_REPO}.git" HEAD >/dev/null 2>&1; then
               echo "$name: OK - can reach ${CET_REPO}"
             else
