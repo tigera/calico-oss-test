@@ -7,8 +7,8 @@
 #
 # Auth:
 #   - CLAUDE_TOKEN: org Anthropic API key (tigera-dev workspace) for the action.
-#   - CALI_BOT_PAT / TEST_GH_TOKEN_CLASSIC: cross-repo GitHub tokens; the first
-#     one that can actually reach calico-enterprise-test is used.
+#   - TEST_GH_TOKEN_CLASSIC: classic PAT (SSO-authorized for the tigera org)
+#     used to clone/push calico-enterprise-test.
 
 name: Auto-pick OSS PR into Enterprise
 
@@ -37,9 +37,8 @@ jobs:
       PR_BODY: ${{ github.event.pull_request.body }}
       OSS_REPO: ${{ github.repository }}
       CET_REPO: ${{ github.repository_owner }}/calico-enterprise-test
-      # Cross-repo token candidates (first that reaches Enterprise wins).
+      # Cross-repo token: classic PAT with tigera SSO authorization.
       T_CLASSIC: ${{ secrets.TEST_GH_TOKEN_CLASSIC }}
-      T_CALI: ${{ secrets.CALI_BOT_PAT }}
     steps:
       # 1. Clone Enterprise into the workspace, add OSS as a remote, and attempt
       #    the cherry-pick. Everything git happens here, in shell.
@@ -50,7 +49,7 @@ jobs:
         run: |
           # Pick the first cross-repo token that can actually reach Enterprise.
           CET_TOKEN=""; TOKNAME=""
-          for name in T_CLASSIC T_CALI; do
+          for name in T_CLASSIC; do
             v="${!name}"
             [ -z "$v" ] && continue
             if git ls-remote "https://x-access-token:${v}@github.com/${CET_REPO}.git" HEAD >/dev/null 2>&1; then
