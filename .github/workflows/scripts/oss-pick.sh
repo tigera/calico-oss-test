@@ -57,15 +57,26 @@ do_pick() {
     echo "::error::cannot reach ${TARGET_REPO} with the supplied token"
     exit 1
   fi
-  # Idempotency: if the pick branch already exists on the target, stop.
+  # Idempotency: a matching PR (any state) means the pick is done. A branch with
+  # NO PR is a stranded push from a prior run whose PR creation failed; delete it
+  # and re-pick cleanly (self-heal) instead of skipping forever.
   if git ls-remote --exit-code --heads "$tgt_url" "$BRANCH_NAME" >/dev/null 2>&1; then
-    echo "Branch $BRANCH_NAME already exists on ${TARGET_REPO}; already picked."
-    emit "outcome=already"; return 0
+    if [ -n "$(GH_TOKEN="$TARGET_TOKEN" gh pr list -R "$TARGET_REPO" --head "$BRANCH_NAME" --state all --json number --jq '.[0].number // empty' 2>/dev/null)" ]; then
+      echo "Branch $BRANCH_NAME already has a PR on ${TARGET_REPO}; already picked."
+      emit "outcome=already"; return 0
+    fi
+    echo "::warning::Branch $BRANCH_NAME exists with no PR (stranded); deleting and re-picking."
+    git push "$tgt_url" --delete "$BRANCH_NAME" || true
   fi
 
   git clone "$tgt_url" .
   git remote add source "$src_url"
   git fetch --no-tags source "$SOURCE_REF"
+  # Drop the tokened URLs from .git/config before the conflict-resolution agent
+  # (Bash/Read over untrusted OSS content) sees this workspace. Remaining git ops
+  # here are local; open-pr pushes with an explicit tokened URL.
+  git remote set-url origin "https://github.com/${TARGET_REPO}.git"
+  git remote set-url source "https://github.com/${SOURCE_REPO}.git"
   git checkout -b "$BRANCH_NAME" "origin/${TARGET_BRANCH}"
 
   # Squash/single-parent -> plain pick; true merge commit -> -m 1. -x records
@@ -125,8 +136,14 @@ build_pr_text() {
   PR_TITLE_OUT="${prefix}${stripped}"
 
   local conflicts="No conflicts: the cherry-pick applied cleanly."
-  if [ "${OUTCOME:-}" = "conflict" ] && [ -n "${RESOLUTION_REPORT:-}" ] && [ -f "$RESOLUTION_REPORT" ]; then
-    conflicts="$(cat "$RESOLUTION_REPORT")"
+  if [ "${OUTCOME:-}" = "conflict" ]; then
+    if [ -n "${RESOLUTION_REPORT:-}" ] && [ -s "$RESOLUTION_REPORT" ]; then
+      conflicts="$(cat "$RESOLUTION_REPORT")"
+    else
+      # Fail closed on the body text: never claim "clean" for a conflict pick
+      # whose report went missing. A human reviewer must scrutinise the diff.
+      conflicts=":warning: Conflicts were auto-resolved during the cherry-pick, but the resolution report is missing. Review the diff carefully before merging."
+    fi
   fi
 
   PR_BODY_OUT="$(cat <<EOF
