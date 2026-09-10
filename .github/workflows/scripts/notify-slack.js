@@ -47,7 +47,7 @@ async function main() {
     : '';
   const target = `${env.TARGET_LABEL || 'Enterprise'} ${env.TARGET_BRANCH || ''}`.trim();
   // Slack mrkdwn links: <url|text>. #<n> -> source PR; target label -> pick PR.
-  const text = `:cherries: Your OSS PR <${env.SRC_URL}|#${env.SRC_PR}> (${env.SRC_TITLE}) `
+  const text = `:cherries: Your OSS PR <${env.SRC_URL}|#${env.SRC_PR}> (*${env.SRC_TITLE}*) `
     + `was auto-cherry-picked to <${env.EE_PR_URL}|${target}>${note}`;
 
   let data;
