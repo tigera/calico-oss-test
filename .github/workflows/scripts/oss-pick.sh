@@ -161,8 +161,13 @@ EOF
       | grep -vxE 'cherry-pick-candidate|skip-bot-cherry-pick' | paste -sd, || true)"
   fi
   PR_LABELS_OUT="$carried"
-  [ -n "$EXTRA_LABELS" ] && PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}$EXTRA_LABELS"
-  [ "${OUTCOME:-}" = "conflict" ] && PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}auto-resolved-conflict"
+  if [ -n "$EXTRA_LABELS" ]; then
+    PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}$EXTRA_LABELS"
+  fi
+  if [ "${OUTCOME:-}" = "conflict" ]; then
+    PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}auto-resolved-conflict"
+  fi
+  return 0
 }
 
 do_open_pr() {
