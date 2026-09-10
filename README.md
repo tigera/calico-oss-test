@@ -30,6 +30,7 @@ Project Calico, created and maintained by [Tigera][tigera], is an open-source pr
 - **Kubernetes Networking Policy Support**: Continually defining excellence in Kubernetes network policy standards and support.
 - **Vibrant Contributor Community**: Over 200 contributors from a wide array of global companies.
 - **Flexible networking**: An array of networking tools at your disposal, including BGP, VXLAN, service advertisement, and more.
+- **Observability**: Flow logs and visualizations to understand traffic across your cluster.
 
 <div align=center>
 <img src="https://www.tigera.io/app/uploads/2026/01/Ecosystem_2026.svg">
