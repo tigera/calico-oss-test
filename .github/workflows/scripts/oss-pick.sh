@@ -37,10 +37,10 @@ src_url="https://x-access-token:${SOURCE_TOKEN}@github.com/${SOURCE_REPO}.git"
 tgt_url="https://x-access-token:${TARGET_TOKEN}@github.com/${TARGET_REPO}.git"
 src_org="${SOURCE_REPO%%/*}"; src_name="${SOURCE_REPO##*/}"
 
-# Deterministic branch (mirrors the enterprise script's NEWBRANCH), so re-runs
-# are idempotent.
-BRANCH_NAME="${BRANCH_NAME:-auto-pick-of-#${PR_NUMBER}-${TARGET_BRANCH}}"
-BRANCH_NAME="$(printf '%s' "$BRANCH_NAME" | sed 's/\//-/g')"
+# Deterministic branch, so re-runs are idempotent. No '#': it breaks the
+# claude-code-action's internal git handling (it resets the workspace).
+BRANCH_NAME="${BRANCH_NAME:-auto-pick-of-${src_name}-${PR_NUMBER}-${TARGET_BRANCH}}"
+BRANCH_NAME="$(printf '%s' "$BRANCH_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
 
 mask() { [ -n "${GITHUB_ACTIONS:-}" ] && echo "::add-mask::$1" || true; }
 emit() { echo "$1"; [ -n "${GITHUB_OUTPUT:-}" ] && echo "$1" >>"$GITHUB_OUTPUT" || true; }
