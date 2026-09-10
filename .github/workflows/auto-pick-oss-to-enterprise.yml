@@ -45,56 +45,31 @@ jobs:
       EXTRA_LABELS: merge-oss-cherry-pick
       TITLE_PREFIX: "[OSS pick] "
     steps:
-      # 0. Re-derive the merged PR from the trigger's head SHA. workflow_run has
-      #    no PR payload, and fork PRs aren't returned by the commits->pulls
-      #    endpoint, so use the search API (with one retry for index lag). Only
-      #    proceed for a PR actually merged into master.
+      # Fetch the vendored scripts without checking out the (large) repo; the
+      # enterprise clone happens into the workspace root, so the scripts live
+      # outside it in RUNNER_TEMP. Unconditional and first, because the resolve
+      # step below runs resolve-merged-pr.js.
+      - name: Fetch scripts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for f in oss-pick.sh notify-slack.js resolve-merged-pr.js; do
+            gh api "repos/${SOURCE_REPO}/contents/.github/workflows/scripts/${f}?ref=master" \
+              --jq '.content' | base64 -d > "$RUNNER_TEMP/${f}"
+          done
+          chmod +x "$RUNNER_TEMP/oss-pick.sh"
+
+      # 0. Re-derive the merged PR from the trigger's head SHA (workflow_run has
+      #    no PR payload). resolve-merged-pr.js searches by SHA, retries once for
+      #    index lag, confirms the PR merged to master, and writes the outputs
+      #    proceed/pr/sha/login.
       - name: Resolve merged PR
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          find_pr() {
-            gh api "search/issues?q=sha:${HEAD_SHA}+repo:${SOURCE_REPO}+is:pr" \
-              --jq '.items[0].number // empty' 2>/dev/null || true
-          }
-          PR=$(find_pr)
-          if [ -z "$PR" ]; then sleep 5; PR=$(find_pr); fi
-          if [ -z "$PR" ]; then
-            echo "::notice::no PR found for ${HEAD_SHA} -- skipping"
-            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          J=$(gh api "repos/${SOURCE_REPO}/pulls/${PR}")
-          MERGED=$(printf '%s' "$J" | jq -r '.merged')
-          BASE=$(printf '%s' "$J" | jq -r '.base.ref')
-          SHA=$(printf '%s' "$J" | jq -r '.merge_commit_sha')
-          LOGIN=$(printf '%s' "$J" | jq -r '.user.login')
-          if [ "$MERGED" != "true" ] || [ "$BASE" != "master" ] || [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
-            echo "::notice::PR #${PR} is not a merged master PR -- skipping"
-            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "Resolved merged PR #${PR} (merge ${SHA})"
-          {
-            echo "proceed=true"
-            echo "pr=${PR}"
-            echo "sha=${SHA}"
-            echo "login=${LOGIN}"
-          } >> "$GITHUB_OUTPUT"
-
-      # Fetch the vendored scripts without checking out the (large) repo; the
-      # enterprise clone happens into the workspace root, so the scripts live
-      # outside it in RUNNER_TEMP.
-      - name: Fetch scripts
-        if: steps.resolve.outputs.proceed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for f in oss-pick.sh notify-slack.js; do
-            gh api "repos/${SOURCE_REPO}/contents/.github/workflows/scripts/${f}?ref=master" \
-              --jq '.content' | base64 -d > "$RUNNER_TEMP/${f}"
-          done
-          chmod +x "$RUNNER_TEMP/oss-pick.sh"
+          BASE_REF: ${{ env.SOURCE_REF }}
+        run: node "$RUNNER_TEMP/resolve-merged-pr.js"
 
       # 1. Clone the target, cherry-pick the merged commit. Conflicts (if any)
       #    are left in the tree for Claude. Outcome: clean|conflict|empty|already.
