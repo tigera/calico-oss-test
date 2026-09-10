@@ -42,15 +42,17 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
     steps:
-      # Fetch the vendored pick script without checking out the (large) repo;
-      # the enterprise clone happens into the workspace root, so the script
-      # lives outside it in RUNNER_TEMP.
-      - name: Fetch pick script
+      # Fetch the vendored scripts without checking out the (large) repo; the
+      # enterprise clone happens into the workspace root, so the scripts live
+      # outside it in RUNNER_TEMP.
+      - name: Fetch scripts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/${SOURCE_REPO}/contents/.github/workflows/scripts/oss-pick.sh?ref=master" \
-            --jq '.content' | base64 -d > "$RUNNER_TEMP/oss-pick.sh"
+          for f in oss-pick.sh notify-slack.js; do
+            gh api "repos/${SOURCE_REPO}/contents/.github/workflows/scripts/${f}?ref=master" \
+              --jq '.content' | base64 -d > "$RUNNER_TEMP/${f}"
+          done
           chmod +x "$RUNNER_TEMP/oss-pick.sh"
 
       # 1. Clone the target, cherry-pick the merged commit. Conflicts (if any)
@@ -160,39 +162,10 @@ jobs:
           SRC_PR: ${{ github.event.pull_request.number }}
           SRC_URL: ${{ github.event.pull_request.html_url }}
           SRC_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$PICK_NOTIFY_MAP" ]; then
-            echo "::notice::Slack token or PICK_NOTIFY_MAP unset -- skipping"; exit 0
-          fi
-          # Resolve the author's Slack ID from the login:slack-id map. Strip
-          # whitespace per record (a global strip would rejoin entries).
-          SLACK_ID=$(printf '%s' "$PICK_NOTIFY_MAP" | tr ',' '\n' \
-            | awk -F: -v u="$AUTHOR_LOGIN" '{gsub(/[[:space:]]/,"")} $1==u {print $2; exit}')
-          if [ -z "$SLACK_ID" ]; then
-            echo "::notice::author $AUTHOR_LOGIN not in PICK_NOTIFY_MAP -- skipping"; exit 0
-          fi
-          NOTE=""
-          [ "$OUTCOME" = "conflict" ] && NOTE=" (conflicts were AI-resolved -- please review the resolution)"
-          # SRC_TITLE is attacker-controlled: it reaches Slack only through
-          # jq --arg (JSON-escaped), never shell-evaluated.
-          # Slack mrkdwn links: <url|text>. #<n> links to the OSS PR; the word
-          # "Enterprise" links to the cherry-pick PR.
-          TEXT=":cherries: Your OSS PR <${SRC_URL}|#${SRC_PR}> (${SRC_TITLE}) was auto-cherry-picked to <${EE_PR_URL}|Enterprise>${NOTE}"
-          slack() {
-            curl -sS --max-time 30 -X POST "https://slack.com/api/$1" \
-              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-              -H 'Content-Type: application/json; charset=utf-8' \
-              --data-binary "$2"
-          }
-          # DM by posting straight to the user ID as the channel (like the
-          # merge-queue-bot's slackDM). This needs only chat:write; it does not
-          # require im:write / conversations.open.
-          RESP=$(slack chat.postMessage "$(jq -n --arg c "$SLACK_ID" --arg t "$TEXT" '{channel:$c,text:$t,unfurl_links:false}')")
-          if [ "$(printf '%s' "$RESP" | jq -r '.ok // false')" = "true" ]; then
-            echo "DM sent to $AUTHOR_LOGIN ($SLACK_ID)"
-          else
-            echo "::warning::Slack DM failed: $(printf '%s' "$RESP" | jq -r '.error // "unknown"')"
-          fi
+          # Human label for the pick target; the message links it to the PR,
+          # e.g. "Enterprise master". TARGET_BRANCH comes from the job env.
+          TARGET_LABEL: Enterprise
+        run: node "$RUNNER_TEMP/notify-slack.js"
 
       # 5. Always: a one-line summary of what happened.
       - name: Summary
