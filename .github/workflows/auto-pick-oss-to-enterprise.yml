@@ -77,18 +77,19 @@ jobs:
             --max-turns 60
             --model claude-sonnet-4-6
           prompt: |
-            The working directory is a git repo mid-cherry-pick: the OSS commit
-            `$MERGE_SHA` is being applied onto Enterprise (tigera/calico-private)
-            master, and there are conflicts. Enterprise is a superset fork of the
-            OSS repo, so most conflicts are Enterprise-only additions sitting near
-            the lines the OSS change touches.
+            The cherry-pick of the OSS commit `$MERGE_SHA` onto Enterprise
+            (tigera/calico-private) master has already been applied and left
+            conflicts; the working tree is mid-cherry-pick. Enterprise is a
+            superset fork of the OSS repo, so most conflicts are Enterprise-only
+            additions sitting near the lines the OSS change touches.
 
-            Your job: reproduce the OSS change on Enterprise the way an
-            experienced maintainer doing this cherry-pick by hand would. Resolve
-            EVERY conflict you can using real understanding of the code and of
-            what the OSS change is trying to do. A human reviews every PR you
-            open, so resolve confidently; do not punt on a conflict just because
-            it is not "mechanical".
+            Your only job is to resolve those conflicts the way an experienced
+            maintainer finishing this cherry-pick would: understand what the OSS
+            change is trying to do and apply it onto Enterprise, keeping
+            Enterprise-specific code. Resolve EVERY conflict you can using real
+            understanding of the code; a human reviews every PR you open, so
+            resolve confidently and do not punt on a conflict just because it is
+            not "mechanical".
 
             How to resolve:
             - First understand the change. Read the conflicted hunks; use
