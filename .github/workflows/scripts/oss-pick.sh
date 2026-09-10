@@ -205,13 +205,16 @@ do_open_pr() {
   local body_file; body_file="$(mktemp)"
   printf '%s\n' "$PR_BODY_OUT" >"$body_file"
 
-  gh pr create \
+  local pr_url
+  pr_url="$(gh pr create \
     --repo "$TARGET_REPO" \
     --base "$TARGET_BRANCH" \
     --head "$BRANCH_NAME" \
     --title "$PR_TITLE_OUT" \
     --body-file "$body_file" \
-    ${PR_LABELS_OUT:+--label "$PR_LABELS_OUT"}
+    ${PR_LABELS_OUT:+--label "$PR_LABELS_OUT"})"
+  echo "$pr_url"
+  emit "pr_url=$pr_url"
 }
 
 case "${1:-}" in

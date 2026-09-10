@@ -134,6 +134,7 @@ jobs:
       #    empty/already, or Claude could not finish a conflict. The script
       #    self-guards against pushing a broken tree.
       - name: Open PR
+        id: openpr
         if: >
           steps.pick.outputs.outcome == 'clean' ||
           (steps.pick.outputs.outcome == 'conflict' && steps.claude.outcome == 'success')
@@ -144,7 +145,55 @@ jobs:
           RESOLUTION_REPORT: /tmp/resolution-report.md
         run: bash "$RUNNER_TEMP/oss-pick.sh" open-pr
 
-      # 4. Always: a one-line summary of what happened.
+      # 4. DM the original PR author on Slack that their change was auto-picked.
+      #    Opt-in via the PICK_NOTIFY_MAP variable (login:slack-id pairs); a
+      #    no-op if unconfigured or the author isn't mapped, and soft-fail
+      #    throughout so a Slack hiccup never fails the pick.
+      - name: Notify author on Slack
+        if: steps.openpr.outputs.pr_url != ''
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
+          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          EE_PR_URL: ${{ steps.openpr.outputs.pr_url }}
+          OUTCOME: ${{ steps.pick.outputs.outcome }}
+          SRC_PR: ${{ github.event.pull_request.number }}
+          SRC_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$PICK_NOTIFY_MAP" ]; then
+            echo "::notice::Slack token or PICK_NOTIFY_MAP unset -- skipping"; exit 0
+          fi
+          # Resolve the author's Slack ID from the login:slack-id map. Strip
+          # whitespace per record (a global strip would rejoin entries).
+          SLACK_ID=$(printf '%s' "$PICK_NOTIFY_MAP" | tr ',' '\n' \
+            | awk -F: -v u="$AUTHOR_LOGIN" '{gsub(/[[:space:]]/,"")} $1==u {print $2; exit}')
+          if [ -z "$SLACK_ID" ]; then
+            echo "::notice::author $AUTHOR_LOGIN not in PICK_NOTIFY_MAP -- skipping"; exit 0
+          fi
+          NOTE=""
+          [ "$OUTCOME" = "conflict" ] && NOTE=" (conflicts were AI-resolved -- please review the resolution)"
+          # SRC_TITLE is attacker-controlled: it reaches Slack only through
+          # jq --arg (JSON-escaped), never shell-evaluated.
+          TEXT=":cherries: Your OSS PR #${SRC_PR} (${SRC_TITLE}) was auto-cherry-picked to Enterprise: ${EE_PR_URL}${NOTE}"
+          slack() {
+            curl -sS --max-time 30 -X POST "https://slack.com/api/$1" \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H 'Content-Type: application/json; charset=utf-8' \
+              --data-binary "$2"
+          }
+          OPEN=$(slack conversations.open "$(jq -n --arg u "$SLACK_ID" '{users:$u}')")
+          if [ "$(printf '%s' "$OPEN" | jq -r '.ok // false')" != "true" ]; then
+            echo "::warning::conversations.open failed for $SLACK_ID: $(printf '%s' "$OPEN" | jq -r '.error // "unknown"')"; exit 0
+          fi
+          CH=$(printf '%s' "$OPEN" | jq -r '.channel.id')
+          RESP=$(slack chat.postMessage "$(jq -n --arg c "$CH" --arg t "$TEXT" '{channel:$c,text:$t,unfurl_links:false}')")
+          if [ "$(printf '%s' "$RESP" | jq -r '.ok // false')" = "true" ]; then
+            echo "DM sent to $AUTHOR_LOGIN ($SLACK_ID)"
+          else
+            echo "::warning::Slack DM failed: $(printf '%s' "$RESP" | jq -r '.error // "unknown"')"
+          fi
+
+      # 5. Always: a one-line summary of what happened.
       - name: Summary
         if: always()
         env:
