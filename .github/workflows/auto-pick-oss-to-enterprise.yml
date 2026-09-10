@@ -181,12 +181,10 @@ jobs:
               -H 'Content-Type: application/json; charset=utf-8' \
               --data-binary "$2"
           }
-          OPEN=$(slack conversations.open "$(jq -n --arg u "$SLACK_ID" '{users:$u}')")
-          if [ "$(printf '%s' "$OPEN" | jq -r '.ok // false')" != "true" ]; then
-            echo "::warning::conversations.open failed for $SLACK_ID: $(printf '%s' "$OPEN" | jq -r '.error // "unknown"')"; exit 0
-          fi
-          CH=$(printf '%s' "$OPEN" | jq -r '.channel.id')
-          RESP=$(slack chat.postMessage "$(jq -n --arg c "$CH" --arg t "$TEXT" '{channel:$c,text:$t,unfurl_links:false}')")
+          # DM by posting straight to the user ID as the channel (like the
+          # merge-queue-bot's slackDM). This needs only chat:write; it does not
+          # require im:write / conversations.open.
+          RESP=$(slack chat.postMessage "$(jq -n --arg c "$SLACK_ID" --arg t "$TEXT" '{channel:$c,text:$t,unfurl_links:false}')")
           if [ "$(printf '%s' "$RESP" | jq -r '.ok // false')" = "true" ]; then
             echo "DM sent to $AUTHOR_LOGIN ($SLACK_ID)"
           else
