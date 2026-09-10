@@ -41,16 +41,19 @@ function skip(msg) {
 }
 
 // Fork PRs aren't returned by the commits->pulls endpoint, so use the search
-// API. Returns the PR number as a string, or "" on miss/error.
-function findPr() {
+// API. `sha:` matches every PR that contains the commit, so return ALL
+// candidate numbers (not just the first) and let the caller pick the PR whose
+// head SHA actually equals HEAD_SHA. Returns an array of numbers (empty on miss).
+function findPrs() {
   try {
-    return gh([
+    const out = gh([
       'api',
       `search/issues?q=sha:${HEAD_SHA}+repo:${SOURCE_REPO}+is:pr`,
-      '--jq', '.items[0].number // empty',
+      '--jq', '.items[].number',
     ]).trim();
+    return out ? out.split('\n').map((n) => n.trim()).filter(Boolean) : [];
   } catch {
-    return '';
+    return [];
   }
 }
 
@@ -60,22 +63,37 @@ function main() {
     return;
   }
 
-  let pr = findPr();
-  if (!pr) {
+  let nums = findPrs();
+  if (!nums.length) {
     // The search index can lag a few seconds behind a fresh merge; retry once.
     sleepSync(RETRY_MS);
-    pr = findPr();
+    nums = findPrs();
   }
-  if (!pr) {
+  if (!nums.length) {
     skip(`no PR found for ${HEAD_SHA}`);
     return;
   }
 
-  let j;
-  try {
-    j = JSON.parse(gh(['api', `repos/${SOURCE_REPO}/pulls/${pr}`]));
-  } catch (e) {
-    skip(`could not fetch PR #${pr} (${e.message})`);
+  // `sha:` can match more than one PR (a commit reused across PRs/branches).
+  // Select the PR whose head commit IS the trigger's head SHA; that is the one
+  // that was actually merged. Never blindly trust items[0].
+  let pr = '';
+  let j = null;
+  for (const cand of nums) {
+    let c;
+    try {
+      c = JSON.parse(gh(['api', `repos/${SOURCE_REPO}/pulls/${cand}`]));
+    } catch {
+      continue;
+    }
+    if (c.head && c.head.sha === HEAD_SHA) {
+      pr = cand;
+      j = c;
+      break;
+    }
+  }
+  if (!j) {
+    skip(`no PR whose head is ${HEAD_SHA} (candidates: ${nums.join(',') || 'none'})`);
     return;
   }
 
