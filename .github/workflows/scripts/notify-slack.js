@@ -46,9 +46,10 @@ async function main() {
     ? ' (conflicts were AI-resolved -- please review the resolution)'
     : '';
   const target = `${env.TARGET_LABEL || 'Enterprise'} ${env.TARGET_BRANCH || ''}`.trim();
-  // Slack mrkdwn links: <url|text>. #<n> -> source PR; target label -> pick PR.
-  const text = `:cherries: Your OSS PR <${env.SRC_URL}|#${env.SRC_PR}> (*${env.SRC_TITLE}*) `
-    + `was auto-cherry-picked to <${env.EE_PR_URL}|${target}>${note}`;
+  const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
+  const titlePart = title ? ` (*${title}*)` : '';
+  const text = `:cherries: Your OSS PR <${env.SRC_URL}|#${env.SRC_PR}>${titlePart}`
+    + ` was auto-cherry-picked to <${env.EE_PR_URL}|${target}>${note}`;
 
   let data;
   try {
@@ -59,6 +60,7 @@ async function main() {
         'Content-Type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify({ channel: slackId, text, unfurl_links: false }),
+      signal: AbortSignal.timeout(30000),
     });
     data = await resp.json();
   } catch (err) {
