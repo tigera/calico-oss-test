@@ -158,6 +158,7 @@ jobs:
           EE_PR_URL: ${{ steps.openpr.outputs.pr_url }}
           OUTCOME: ${{ steps.pick.outputs.outcome }}
           SRC_PR: ${{ github.event.pull_request.number }}
+          SRC_URL: ${{ github.event.pull_request.html_url }}
           SRC_TITLE: ${{ github.event.pull_request.title }}
         run: |
           if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$PICK_NOTIFY_MAP" ]; then
@@ -174,7 +175,9 @@ jobs:
           [ "$OUTCOME" = "conflict" ] && NOTE=" (conflicts were AI-resolved -- please review the resolution)"
           # SRC_TITLE is attacker-controlled: it reaches Slack only through
           # jq --arg (JSON-escaped), never shell-evaluated.
-          TEXT=":cherries: Your OSS PR #${SRC_PR} (${SRC_TITLE}) was auto-cherry-picked to Enterprise: ${EE_PR_URL}${NOTE}"
+          # Slack mrkdwn links: <url|text>. #<n> links to the OSS PR; the word
+          # "Enterprise" links to the cherry-pick PR.
+          TEXT=":cherries: Your OSS PR <${SRC_URL}|#${SRC_PR}> (${SRC_TITLE}) was auto-cherry-picked to <${EE_PR_URL}|Enterprise>${NOTE}"
           slack() {
             curl -sS --max-time 30 -X POST "https://slack.com/api/$1" \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
