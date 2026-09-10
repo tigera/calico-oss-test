@@ -1,11 +1,12 @@
-# Auto-pick a merged OSS master PR into the Enterprise repo (OSS master -> EE
-# master).
+# Stage 2 of the auto-pick (security split): the privileged worker. Runs via
+# workflow_run from the trusted default branch, so the cross-repo token and the
+# Claude agent never run in the untrusted PR event's context. It has no PR
+# payload, so it re-derives the merged PR from the trigger's head SHA
+# (GitHub-set) and confirms it merged to master before doing anything.
 #
-# The git work is done by the generic .github/workflows/scripts/oss-pick.sh,
-# which is flow-agnostic (source/target are passed in). This workflow fixes the
-# flow to OSS master -> EE master; a separate workflow will drive the release
-# backports with the same script and different params. Claude is invoked ONLY
-# to resolve conflicts by editing files.
+# Flow: OSS master -> EE master. The git work is done by the generic
+# .github/workflows/scripts/oss-pick.sh (source/target passed in); Claude is
+# invoked ONLY to resolve conflicts by editing files.
 #
 # Auth:
 #   - CLAUDE_TOKEN: org Anthropic API key (tigera-dev workspace) for the action.
@@ -15,21 +16,25 @@
 name: Auto-pick OSS PR into Enterprise
 
 on:
-  pull_request_target:
-    types: [closed]
-    branches: [master]
+  workflow_run:
+    workflows: ["Auto-pick OSS PR into Enterprise (trigger)"]
+    types: [completed]
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: auto-pick-oss-${{ github.event.pull_request.number }}
+  # PR number is unknown until the resolve step; key on the trigger's head SHA.
+  group: auto-pick-oss-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
   auto-pick:
-    if: github.event.pull_request.merged == true
+    # Only act on a successful trigger run from the pull_request event.
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
       # This workflow's flow: OSS master -> EE master.
@@ -39,38 +44,54 @@ jobs:
       TARGET_BRANCH: master
       EXTRA_LABELS: merge-oss-cherry-pick
       TITLE_PREFIX: "[OSS pick] "
-      PR_NUMBER: ${{ github.event.pull_request.number }}
-      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
     steps:
       # Fetch the vendored scripts without checking out the (large) repo; the
       # enterprise clone happens into the workspace root, so the scripts live
-      # outside it in RUNNER_TEMP.
+      # outside it in RUNNER_TEMP. Unconditional and first, because the resolve
+      # step below runs resolve-merged-pr.js.
       - name: Fetch scripts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for f in oss-pick.sh notify-slack.js; do
+          for f in oss-pick.sh notify-slack.js resolve-merged-pr.js; do
             gh api "repos/${SOURCE_REPO}/contents/.github/workflows/scripts/${f}?ref=master" \
               --jq '.content' | base64 -d > "$RUNNER_TEMP/${f}"
           done
           chmod +x "$RUNNER_TEMP/oss-pick.sh"
 
+      # 0. Re-derive the merged PR from the trigger's head SHA (workflow_run has
+      #    no PR payload). resolve-merged-pr.js searches by SHA, retries once for
+      #    index lag, confirms the PR merged to master, and writes the outputs
+      #    proceed/pr/sha/login.
+      - name: Resolve merged PR
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          BASE_REF: ${{ env.SOURCE_REF }}
+        run: node "$RUNNER_TEMP/resolve-merged-pr.js"
+
       # 1. Clone the target, cherry-pick the merged commit. Conflicts (if any)
       #    are left in the tree for Claude. Outcome: clean|conflict|empty|already.
       - name: Pick
         id: pick
+        if: steps.resolve.outputs.proceed == 'true'
         env:
           TARGET_TOKEN: ${{ secrets.TEST_GH_TOKEN_CLASSIC }}
           SOURCE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
+          MERGE_SHA: ${{ steps.resolve.outputs.sha }}
         run: bash "$RUNNER_TEMP/oss-pick.sh" pick
 
       # 2. Claude resolves conflicts ONLY (edits + git add + cherry-pick
       #    --continue). No push, no PR. Cross-fork intent: keep Enterprise side.
       - name: Claude resolves the conflict
         id: claude
-        if: steps.pick.outputs.outcome == 'conflict'
+        if: steps.resolve.outputs.proceed == 'true' && steps.pick.outputs.outcome == 'conflict'
         uses: anthropics/claude-code-action@v1
         continue-on-error: true
+        env:
+          MERGE_SHA: ${{ steps.resolve.outputs.sha }}
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_TOKEN }}
           github_token: ${{ github.token }}
@@ -138,44 +159,53 @@ jobs:
       - name: Open PR
         id: openpr
         if: >
-          steps.pick.outputs.outcome == 'clean' ||
-          (steps.pick.outputs.outcome == 'conflict' && steps.claude.outcome == 'success')
+          steps.resolve.outputs.proceed == 'true' &&
+          (steps.pick.outputs.outcome == 'clean' ||
+           (steps.pick.outputs.outcome == 'conflict' && steps.claude.outcome == 'success'))
         env:
           TARGET_TOKEN: ${{ secrets.TEST_GH_TOKEN_CLASSIC }}
           SOURCE_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
+          MERGE_SHA: ${{ steps.resolve.outputs.sha }}
           OUTCOME: ${{ steps.pick.outputs.outcome }}
           RESOLUTION_REPORT: /tmp/resolution-report.md
         run: bash "$RUNNER_TEMP/oss-pick.sh" open-pr
 
       # 4. DM the original PR author on Slack that their change was auto-picked.
-      #    Opt-in via the PICK_NOTIFY_MAP variable (login:slack-id pairs); a
-      #    no-op if unconfigured or the author isn't mapped, and soft-fail
-      #    throughout so a Slack hiccup never fails the pick.
+      #    Opt-in via the PICK_NOTIFY_MAP variable; soft-fail so a Slack hiccup
+      #    never fails the pick. The title/url are fetched here by PR number so
+      #    the attacker-controlled title never flows through a step output.
       - name: Notify author on Slack
         if: steps.openpr.outputs.pr_url != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
           PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
-          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
           EE_PR_URL: ${{ steps.openpr.outputs.pr_url }}
           OUTCOME: ${{ steps.pick.outputs.outcome }}
-          SRC_PR: ${{ github.event.pull_request.number }}
-          SRC_URL: ${{ github.event.pull_request.html_url }}
-          SRC_TITLE: ${{ github.event.pull_request.title }}
+          SRC_PR: ${{ steps.resolve.outputs.pr }}
           # Human label for the pick target; the message links it to the PR,
           # e.g. "Enterprise master". TARGET_BRANCH comes from the job env.
           TARGET_LABEL: Enterprise
-        run: node "$RUNNER_TEMP/notify-slack.js"
+        run: |
+          J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}")
+          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
+          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
+          node "$RUNNER_TEMP/notify-slack.js"
 
       # 5. Always: a one-line summary of what happened.
       - name: Summary
         if: always()
         env:
+          PROCEED: ${{ steps.resolve.outputs.proceed }}
+          PR: ${{ steps.resolve.outputs.pr }}
           OUTCOME: ${{ steps.pick.outputs.outcome }}
           CLAUDE: ${{ steps.claude.outcome }}
         run: |
           {
             echo "### Auto-pick summary (${SOURCE_REPO}@${SOURCE_REF} -> ${TARGET_REPO}@${TARGET_BRANCH})"
+            echo "- resolved PR: ${PR:-none} (proceed=${PROCEED:-false})"
             echo "- outcome: ${OUTCOME:-n/a}"
             echo "- claude: ${CLAUDE:-skipped}"
           } >> "$GITHUB_STEP_SUMMARY"
