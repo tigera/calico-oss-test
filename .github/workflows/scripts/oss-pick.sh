@@ -175,12 +175,16 @@ do_open_pr() {
   cd "$WORKDIR"
   export GH_TOKEN="$TARGET_TOKEN"
 
-  # Safety net: never push a broken tree.
+  # Safety net: an unfinished cherry-pick or leftover markers is real breakage.
   if [ -e .git/CHERRY_PICK_HEAD ]; then
     echo "::error::cherry-pick still in progress; refusing to open PR"; exit 1
   fi
-  if [ -z "$(git log "origin/${TARGET_BRANCH}..HEAD" --oneline 2>/dev/null)" ]; then
-    echo "::error::no new commit over origin/${TARGET_BRANCH}; nothing to open"; exit 1
+  # No NET change over the base (no new commit, or only empty commits) means the
+  # OSS change was fully superseded by Enterprise once resolved. That is a
+  # legitimate "nothing to pick" outcome, not an error -- skip without a PR.
+  if git diff --quiet "origin/${TARGET_BRANCH}" HEAD 2>/dev/null; then
+    echo "::notice::resolution produced no net change over origin/${TARGET_BRANCH}; nothing to pick"
+    exit 0
   fi
   local f
   while IFS= read -r f; do
