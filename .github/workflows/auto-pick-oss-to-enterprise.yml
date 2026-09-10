@@ -20,9 +20,12 @@ on:
     workflows: ["Auto-pick OSS PR into Enterprise (trigger)"]
     types: [completed]
 
+# Least privilege: every target write (push, gh pr create, labels) uses
+# TIGERA_BOT_PAT; github.token is read-only here (source clone, gh api reads,
+# the Claude action's actor-permission check). So no pull-requests: write.
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
   # PR number is unknown until the resolve step; key on the trigger's head SHA.
