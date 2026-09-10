@@ -224,13 +224,16 @@ func (c *calicoCache) reconcile(reconcilerPeriod string) {
 	}
 
 	// Loop forever, performing a datastore reconciliation periodically.
+	consecutiveFailures := 0
 	for {
 		c.log.Debugf("Performing reconciliation")
 		err := c.performDatastoreSync()
 		if err != nil {
-			c.log.WithError(err).Error("Reconciliation failed")
+			consecutiveFailures++
+			c.log.WithError(err).Errorf("Reconciliation failed (%d consecutive failures)", consecutiveFailures)
 			continue
 		}
+		consecutiveFailures = 0
 
 		// Reconciliation was successful, sleep the configured duration.
 		c.log.Debugf("Reconciliation complete, %+v until next one.", duration)
