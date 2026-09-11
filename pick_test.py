@@ -4,8 +4,11 @@
 def process(items, config):
     results = []
     for item in items:
-        try:
-            results.append(transform(item))
-        except TransformError:
-            continue
+        for attempt in range(config.retries):
+            try:
+                results.append(transform(item))
+                break
+            except TransformError:
+                if attempt == config.retries - 1:
+                    raise
     return results
