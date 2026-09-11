@@ -149,7 +149,13 @@ build_pr_text() {
   # so it does not bury the PR; keep the clean case as a one-liner.
   local conflicts_block
   if [ "${OUTCOME:-}" = "conflict" ]; then
-    conflicts_block="$(printf '## Conflicts resolved\n<details>\n<summary><b>AI conflict-resolution report</b> (click to expand)</summary>\n\n%s\n</details>' "$conflicts")"
+    local sevnote
+    case "${CONFLICT_SEVERITY:-}" in
+      light) sevnote="**Conflict severity:** light (straightforward resolution)" ;;
+      heavy) sevnote="**Conflict severity:** heavy (needed real judgement, please review closely)" ;;
+      *)     sevnote="**Conflict severity:** unspecified" ;;
+    esac
+    conflicts_block="$(printf '## Conflicts resolved\n%s\n\n<details>\n<summary><b>AI conflict-resolution report</b> (click to expand)</summary>\n\n%s\n</details>' "$sevnote" "$conflicts")"
   else
     conflicts_block="$(printf '## Conflicts\n%s' "$conflicts")"
   fi
