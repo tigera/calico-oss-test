@@ -48,24 +48,34 @@ async function main() {
 
   const target = `${env.TARGET_LABEL || 'Enterprise'} ${env.TARGET_BRANCH || ''}`.trim();
   const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
-  const titlePart = title ? ` (*${title}*)` : '';
+  const titleLine = title ? `> _${title}_` : '';
   const prLink = `<${env.SRC_URL}|#${env.SRC_PR}>`;
 
+  // Slack mrkdwn: '\n' is a line break; keep each message a short headline plus
+  // one or two detail lines rather than a run-on sentence.
   let text;
   if (env.MODE === 'escalated') {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
-    const runPart = env.RUN_URL ? ` <${env.RUN_URL}|See the run>.` : '';
-    text = `:warning: Your OSS PR ${prLink}${titlePart} could NOT be auto-cherry-picked to ${target}: ${reason}. A human needs to finish it.${runPart}`;
+    const lines = [
+      `:warning:  *Auto cherry-pick needs a human*`,
+      `Your OSS PR ${prLink} could not be picked to *${target}*.`,
+      titleLine,
+      `*Reason:*  ${reason}`,
+    ].filter(Boolean);
+    if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>`);
+    text = lines.join('\n');
   } else {
-    let note = '';
+    const lines = [
+      `:cherries:  Your OSS PR ${prLink} was auto-cherry-picked to <${env.EE_PR_URL}|*${target}*>.`,
+      titleLine,
+    ].filter(Boolean);
     if (env.OUTCOME === 'conflict') {
       const sev = (env.CONFLICT_SEVERITY || '').toLowerCase();
-      const level = sev === 'heavy' ? 'heavy conflict' : sev === 'light' ? 'light conflict' : 'conflict';
-      const closer = sev === 'heavy' ? ' -- please review closely' : ' -- please review';
-      note = ` (${level}, AI-resolved${closer})`;
+      if (sev === 'heavy') lines.push(`:warning:  *Heavy conflict*, AI-resolved. Please review closely.`);
+      else if (sev === 'light') lines.push(`:eyes:  *Light conflict*, AI-resolved. Please review.`);
+      else lines.push(`:eyes:  *Conflict*, AI-resolved. Please review.`);
     }
-    text = `:cherries: Your OSS PR ${prLink}${titlePart}`
-      + ` was auto-cherry-picked to <${env.EE_PR_URL}|${target}>${note}`;
+    text = lines.join('\n');
   }
 
   let data;
