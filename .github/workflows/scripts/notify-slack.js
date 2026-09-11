@@ -55,20 +55,22 @@ async function main() {
   // 【PR】 to the cherry-pick PR, matching the team's PR-list link tags.
   const osTag = `<${env.SRC_URL}|【OS】>`;
 
+  // Line 1 carries no icon; the result icon sits on the status line below,
+  // next to the resolution text.
   let text;
   if (env.MODE === 'escalated') {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
     const lines = [
-      `:warning:  #${env.SRC_PR} ${osTag}${titlePart}`,
-      `Your OSS PR could NOT be auto-cherry-picked to ${targetPlain}.`,
+      `#${env.SRC_PR} ${osTag}${titlePart}`,
+      `:warning:  Your OSS PR could NOT be auto-cherry-picked to ${targetPlain}.`,
       `*Reason:*  ${reason}.`,
     ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>.`);
     text = lines.join('\n');
   } else if (env.MODE === 'noop') {
     const lines = [
-      `:information_source:  #${env.SRC_PR} ${osTag}${titlePart}`,
-      `Nothing to cherry-pick to ${targetPlain}: the change is already present or was superseded.`,
+      `#${env.SRC_PR} ${osTag}${titlePart}`,
+      `:information_source:  Nothing to cherry-pick to ${targetPlain}: the change is already present or was superseded.`,
     ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run>.`);
     text = lines.join('\n');
@@ -76,8 +78,8 @@ async function main() {
     const prTag = env.EE_PR_URL ? ` <${env.EE_PR_URL}|【PR】>` : '';
     const review = env.EE_PR_URL ? `<${env.EE_PR_URL}|Please review>` : 'Please review';
     const lines = [
-      `:cherries:  #${env.SRC_PR} ${osTag}${prTag}${titlePart}`,
-      `Your OSS PR has been auto-cherry-picked to ${targetPlain}.`,
+      `#${env.SRC_PR} ${osTag}${prTag}${titlePart}`,
+      `:cherries:  Your OSS PR has been auto-cherry-picked to ${targetPlain}.`,
     ];
     if (env.OUTCOME === 'conflict') {
       const sev = (env.CONFLICT_SEVERITY || '').toLowerCase();
