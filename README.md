@@ -7,6 +7,7 @@
 <div align=center>
 <h1>Calico Open Source</h1>
 <p align="center">Cloud-native networking and security for containers, VMs, and bare metal</p>
+<p align="center"><b>Star us on GitHub to follow the project!</b></p>
 <h2>
 <a href="https://projectcalico.docs.tigera.io/getting-started/kubernetes/quickstart">Quickstart</a> |
 <a href="https://projectcalico.docs.tigera.io">Docs</a> |
