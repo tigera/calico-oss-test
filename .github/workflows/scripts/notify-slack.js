@@ -50,7 +50,7 @@ async function main() {
   const branch = env.TARGET_BRANCH || 'master';
   const targetPlain = `${label} \`${branch}\``;
   const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
-  const titlePart = title ? ` ${title}` : '';
+  const titlePart = title ? ` *${title}*` : '';
   // Line 1: "#<num> 【OS】 【PR】 <title>" where 【OS】 links to the source PR and
   // 【PR】 to the cherry-pick PR, matching the team's PR-list link tags.
   const osTag = `<${env.SRC_URL}|【OS】>`;
@@ -64,6 +64,13 @@ async function main() {
       `*Reason:*  ${reason}.`,
     ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>.`);
+    text = lines.join('\n');
+  } else if (env.MODE === 'noop') {
+    const lines = [
+      `:information_source:  #${env.SRC_PR} ${osTag}${titlePart}`,
+      `Nothing to cherry-pick to ${targetPlain}: the change is already present or was superseded.`,
+    ];
+    if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run>.`);
     text = lines.join('\n');
   } else {
     const prTag = env.EE_PR_URL ? ` <${env.EE_PR_URL}|【PR】>` : '';
