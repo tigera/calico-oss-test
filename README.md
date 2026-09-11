@@ -28,7 +28,7 @@ Project Calico, created and maintained by [Tigera][tigera], is an open-source pr
 - **Optimized Performance**: Engineered for high speed and low CPU usage, maximizing your cluster investments.
 - **Scalable Architecture**: Grows seamlessly with your Kubernetes clusters without sacrificing performance.
 - **Advanced Security**: Get granular access controls and WireGuard encryption.
-- **Squash line A**: original text.
+- **Squash line A**: MODIFIED text.
 - **Squash line B**: second line.
 - **Merge-commit test**: exercising the two-parent cherry-pick path (with -m 1).
 - **Kubernetes Networking Policy Support**: Continually defining excellence in Kubernetes network policy standards and support.
