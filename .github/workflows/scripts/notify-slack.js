@@ -46,32 +46,38 @@ async function main() {
     return;
   }
 
-  const target = `${env.TARGET_LABEL || 'Enterprise'} ${env.TARGET_BRANCH || ''}`.trim();
+  const label = env.TARGET_LABEL || 'Enterprise';
+  const branch = env.TARGET_BRANCH || 'master';
+  const targetPlain = `${label} \`${branch}\``;
   const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
-  // Keep the PR number and its title together so the title is never orphaned.
-  const prRef = `<${env.SRC_URL}|#${env.SRC_PR}>${title ? ` *${title}*` : ''}`;
+  // Line 1 keeps the OSS PR number (linked to the source PR) with its title.
+  const srcRef = `<${env.SRC_URL}|#${env.SRC_PR}>${title ? ` *${title}*` : ''}`;
 
-  // Slack mrkdwn: '\n' is a line break; keep each message a short headline plus
-  // one or two detail lines rather than a run-on sentence.
+  // Three short lines: (1) source PR + title, (2) what happened + target, with
+  // the target linked to the cherry-pick PR, (3) the conflict/reason with a
+  // link to the pick PR (or the run, when it failed).
   let text;
   if (env.MODE === 'escalated') {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
     const lines = [
-      `:warning:  *Auto cherry-pick needs a human*`,
-      `OSS PR ${prRef} could not be picked to *${target}*.`,
-      `*Reason:*  ${reason}`,
+      `:warning:  ${srcRef}`,
+      `Your OSS PR could NOT be auto-cherry-picked to ${targetPlain}.`,
+      `*Reason:*  ${reason}.`,
     ];
-    if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>`);
+    if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>.`);
     text = lines.join('\n');
   } else {
+    const targetRef = env.EE_PR_URL ? `<${env.EE_PR_URL}|${targetPlain}>` : targetPlain;
+    const review = env.EE_PR_URL ? `<${env.EE_PR_URL}|Please review>` : 'Please review';
     const lines = [
-      `:cherries:  Your OSS PR ${prRef} was auto-cherry-picked to <${env.EE_PR_URL}|*${target}*>.`,
+      `:cherries:  ${srcRef}`,
+      `Your OSS PR has been auto-cherry-picked to ${targetRef}.`,
     ];
     if (env.OUTCOME === 'conflict') {
       const sev = (env.CONFLICT_SEVERITY || '').toLowerCase();
-      if (sev === 'heavy') lines.push(`:warning:  *Heavy conflict*, AI-resolved. Please review closely.`);
-      else if (sev === 'light') lines.push(`:eyes:  *Light conflict*, AI-resolved. Please review.`);
-      else lines.push(`:eyes:  *Conflict*, AI-resolved. Please review.`);
+      if (sev === 'heavy') lines.push(`:warning:  Heavy conflict, AI-resolved. ${review} closely.`);
+      else if (sev === 'light') lines.push(`:eyes:  Light conflict, AI-resolved. ${review}.`);
+      else lines.push(`:eyes:  Conflict, AI-resolved. ${review}.`);
     }
     text = lines.join('\n');
   }
