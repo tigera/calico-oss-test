@@ -47,14 +47,20 @@ jobs:
       TARGET_BRANCH: master
       EXTRA_LABELS: merge-oss-cherry-pick
       TITLE_PREFIX: "[OSS pick] "
+      # Common, NON-secret values set once for every step. github.token is
+      # already handed to the Claude action, so exposing it job-wide adds no
+      # risk. The Slack BOT TOKEN is deliberately NOT here: it stays per-notify
+      # step so it never enters the Claude step's (untrusted-content) env.
+      TARGET_LABEL: Enterprise
+      GH_TOKEN: ${{ github.token }}
+      PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # Fetch the vendored scripts without checking out the (large) repo; the
       # enterprise clone happens into the workspace root, so the scripts live
       # outside it in RUNNER_TEMP. Unconditional and first, because the resolve
       # step below runs resolve-merged-pr.js.
       - name: Fetch scripts
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           for f in oss-pick.sh notify-slack.js resolve-merged-pr.js; do
             gh api "repos/${SOURCE_REPO}/contents/.github/workflows/scripts/${f}?ref=master" \
@@ -69,7 +75,6 @@ jobs:
       - name: Resolve merged PR
         id: resolve
         env:
-          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           BASE_REF: ${{ env.SOURCE_REF }}
         run: node "$RUNNER_TEMP/resolve-merged-pr.js"
@@ -92,7 +97,6 @@ jobs:
       - name: Prepare change context
         if: steps.resolve.outputs.proceed == 'true' && steps.pick.outputs.outcome == 'conflict'
         env:
-          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr }}
         run: |
           f=/tmp/change-context.md
@@ -237,58 +241,37 @@ jobs:
           RESOLUTION_REPORT: /tmp/resolution-report.md
         run: bash "$RUNNER_TEMP/oss-pick.sh" open-pr
 
-      # 4. DM the original PR author on Slack that their change was auto-picked.
-      #    Opt-in via the PICK_NOTIFY_MAP variable; soft-fail so a Slack hiccup
-      #    never fails the pick. The title/url are fetched here by PR number so
-      #    the attacker-controlled title never flows through a step output.
+      # Notify steps share the common env from the job (GH_TOKEN, PICK_NOTIFY_MAP,
+      # TARGET_LABEL, RUN_URL, SOURCE_REPO). Each sets only SLACK_BOT_TOKEN (kept
+      # out of the job env so it never reaches the Claude step), the author/PR,
+      # the MODE, and the mode-specific fields. notify-slack.js derives the source
+      # PR url/title itself, so the attacker-controlled title never flows through
+      # a step output. All soft-fail.
+
+      # 4. Picked: DM the author that their change was auto-cherry-picked.
       - name: Notify author on Slack
         if: steps.openpr.outputs.pr_url != ''
         env:
-          GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
-          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
           AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
+          SRC_PR: ${{ steps.resolve.outputs.pr }}
           EE_PR_URL: ${{ steps.openpr.outputs.pr_url }}
           OUTCOME: ${{ steps.pick.outputs.outcome }}
           CONFLICT_SEVERITY: ${{ steps.escalation.outputs.severity }}
-          SRC_PR: ${{ steps.resolve.outputs.pr }}
-          # Human label for the pick target; the message links it to the PR,
-          # e.g. "Enterprise master". TARGET_BRANCH comes from the job env.
-          TARGET_LABEL: Enterprise
-        run: |
-          # Best-effort: a source-PR fetch hiccup must not fail the run after the
-          # pick PR already exists. Skip the DM instead.
-          if ! J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}" 2>/dev/null); then
-            echo "::warning::could not fetch source PR #${SRC_PR}; skipping Slack DM"
-            exit 0
-          fi
-          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
-          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
-          node "$RUNNER_TEMP/notify-slack.js"
+        run: node "$RUNNER_TEMP/notify-slack.js"
 
       # 4b. On escalation (deliberate marker or unfinished run), DM the author
-      #     that their pick needs manual work (soft-fail), then surface the
-      #     report and fail the run. No PR is opened for an escalated pick.
+      #     that their pick needs manual work, then surface the report and fail
+      #     the run (below). No PR is opened for an escalated pick.
       - name: Notify author of escalation on Slack
         if: steps.escalation.outputs.escalated == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
-          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
           AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
           SRC_PR: ${{ steps.resolve.outputs.pr }}
           MODE: escalated
           ESCALATION_REASON: ${{ steps.escalation.outputs.reason }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TARGET_LABEL: Enterprise
-        run: |
-          if ! J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}" 2>/dev/null); then
-            echo "::warning::could not fetch source PR #${SRC_PR}; skipping escalation DM"
-            exit 0
-          fi
-          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
-          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
-          node "$RUNNER_TEMP/notify-slack.js"
+        run: node "$RUNNER_TEMP/notify-slack.js"
 
       # 4c. Fail the run so the escalation is visible; no PR was opened.
       - name: Fail on escalation
@@ -315,21 +298,11 @@ jobs:
           steps.openpr.outputs.pr_url == '' &&
           steps.resolve.outputs.login != ''
         env:
-          GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
-          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
           AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
           SRC_PR: ${{ steps.resolve.outputs.pr }}
           MODE: noop
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TARGET_LABEL: Enterprise
-        run: |
-          if ! J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}" 2>/dev/null); then
-            echo "::warning::could not fetch source PR #${SRC_PR}; skipping DM"; exit 0
-          fi
-          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
-          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
-          node "$RUNNER_TEMP/notify-slack.js"
+        run: node "$RUNNER_TEMP/notify-slack.js"
 
       # 4e. Catch-all: the run failed for a reason other than a deliberate
       #     escalation (e.g. the push was rejected). DM the author so a failed
@@ -340,22 +313,12 @@ jobs:
           steps.escalation.outputs.escalated != 'true' &&
           steps.resolve.outputs.login != ''
         env:
-          GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
-          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
           AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
           SRC_PR: ${{ steps.resolve.outputs.pr }}
           MODE: escalated
           ESCALATION_REASON: the auto-cherry-pick run failed before a PR could be opened
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TARGET_LABEL: Enterprise
-        run: |
-          if ! J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}" 2>/dev/null); then
-            echo "::warning::could not fetch source PR #${SRC_PR}; skipping DM"; exit 0
-          fi
-          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
-          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
-          node "$RUNNER_TEMP/notify-slack.js"
+        run: node "$RUNNER_TEMP/notify-slack.js"
 
       # 5. Always: a one-line summary of what happened.
       - name: Summary
