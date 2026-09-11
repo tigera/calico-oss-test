@@ -50,28 +50,27 @@ async function main() {
   const branch = env.TARGET_BRANCH || 'master';
   const targetPlain = `${label} \`${branch}\``;
   const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
-  // Line 1 keeps the OSS PR number (linked to the source PR) with its title.
-  const srcRef = `<${env.SRC_URL}|#${env.SRC_PR}>${title ? ` *${title}*` : ''}`;
+  const titlePart = title ? ` ${title}` : '';
+  // Line 1: "#<num> 【OS】 【PR】 <title>" where 【OS】 links to the source PR and
+  // 【PR】 to the cherry-pick PR, matching the team's PR-list link tags.
+  const osTag = `<${env.SRC_URL}|【OS】>`;
 
-  // Three short lines: (1) source PR + title, (2) what happened + target, with
-  // the target linked to the cherry-pick PR, (3) the conflict/reason with a
-  // link to the pick PR (or the run, when it failed).
   let text;
   if (env.MODE === 'escalated') {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
     const lines = [
-      `:warning:  ${srcRef}`,
+      `:warning:  #${env.SRC_PR} ${osTag}${titlePart}`,
       `Your OSS PR could NOT be auto-cherry-picked to ${targetPlain}.`,
       `*Reason:*  ${reason}.`,
     ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>.`);
     text = lines.join('\n');
   } else {
-    const targetRef = env.EE_PR_URL ? `<${env.EE_PR_URL}|${targetPlain}>` : targetPlain;
+    const prTag = env.EE_PR_URL ? ` <${env.EE_PR_URL}|【PR】>` : '';
     const review = env.EE_PR_URL ? `<${env.EE_PR_URL}|Please review>` : 'Please review';
     const lines = [
-      `:cherries:  ${srcRef}`,
-      `Your OSS PR has been auto-cherry-picked to ${targetRef}.`,
+      `:cherries:  #${env.SRC_PR} ${osTag}${prTag}${titlePart}`,
+      `Your OSS PR has been auto-cherry-picked to ${targetPlain}.`,
     ];
     if (env.OUTCOME === 'conflict') {
       const sev = (env.CONFLICT_SEVERITY || '').toLowerCase();
