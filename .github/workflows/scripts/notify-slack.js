@@ -9,7 +9,9 @@
 //                    merge-queue-bot (no conversations.open / im:write needed).
 //   PICK_NOTIFY_MAP  "login:slack-id,login:slack-id,..." opt-in map.
 //   AUTHOR_LOGIN     GitHub login of the original PR author.
-//   SRC_PR, SRC_URL, SRC_TITLE   The source PR number, URL, title.
+//   SOURCE_REPO, SRC_PR   The source repo and PR number. SRC_URL is derived
+//                    from them, and SRC_TITLE is fetched via `gh` (best-effort),
+//                    unless either is passed in explicitly.
 //   EE_PR_URL        The created cherry-pick PR URL.
 //   OUTCOME          'clean' | 'conflict' (drives the review note).
 //   CONFLICT_SEVERITY 'light' | 'heavy' (conflict picks; shown in the DM).
@@ -18,6 +20,8 @@
 //   RUN_URL          workflow run URL (escalated mode; link for the human).
 //   TARGET_LABEL     Human label for the target (e.g. "Enterprise").
 //   TARGET_BRANCH    Target branch (e.g. "master").
+
+const { execFileSync } = require('node:child_process');
 
 const env = process.env;
 
@@ -49,11 +53,24 @@ async function main() {
   const label = env.TARGET_LABEL || 'Enterprise';
   const branch = env.TARGET_BRANCH || 'master';
   const targetPlain = `${label} \`${branch}\``;
-  const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
+
+  // Derive the source PR URL and title here (once) instead of in every caller.
+  const server = env.GITHUB_SERVER_URL || 'https://github.com';
+  const srcUrl = env.SRC_URL
+    || (env.SOURCE_REPO && env.SRC_PR ? `${server}/${env.SOURCE_REPO}/pull/${env.SRC_PR}` : '');
+  let srcTitle = env.SRC_TITLE || '';
+  if (!srcTitle && env.SOURCE_REPO && env.SRC_PR) {
+    try {
+      srcTitle = execFileSync('gh',
+        ['api', `repos/${env.SOURCE_REPO}/pulls/${env.SRC_PR}`, '--jq', '.title'],
+        { encoding: 'utf8' }).trim();
+    } catch { /* best-effort; the DM is still useful without the title */ }
+  }
+  const title = srcTitle.replace(/[<>|*]/g, '').trim();
   const titlePart = title ? ` *${title}*` : '';
   // Line 1: "#<num> 【OS】 【PR】 <title>" where 【OS】 links to the source PR and
   // 【PR】 to the cherry-pick PR, matching the team's PR-list link tags.
-  const osTag = `<${env.SRC_URL}|【OS】>`;
+  const osTag = `<${srcUrl}|【OS】>`;
 
   // Line 1 carries no icon; the result icon sits on the status line below,
   // next to the resolution text.
