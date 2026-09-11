@@ -18,7 +18,7 @@
 #               TARGET_TOKEN
 # Optional env: SOURCE_REF(=master) SOURCE_TOKEN(=TARGET_TOKEN) EXTRA_LABELS
 #               CARRY_SOURCE_LABELS(=true) OUTCOME RESOLUTION_REPORT
-#               BRANCH_NAME WORKDIR(=PWD)
+#               CONFLICT_SEVERITY(light|heavy) BRANCH_NAME WORKDIR(=PWD)
 set -o errexit -o nounset -o pipefail
 
 : "${SOURCE_REPO:?}" "${TARGET_REPO:?}" "${TARGET_BRANCH:?}"
@@ -145,13 +145,20 @@ build_pr_text() {
       conflicts=":warning: Conflicts were auto-resolved during the cherry-pick, but the resolution report is missing. Review the diff carefully before merging."
     fi
   fi
+  # For a conflict, tuck the (possibly long) AI report into a collapsible block
+  # so it does not bury the PR; keep the clean case as a one-liner.
+  local conflicts_block
+  if [ "${OUTCOME:-}" = "conflict" ]; then
+    conflicts_block="$(printf '## Conflicts resolved\n<details>\n<summary><b>AI conflict-resolution report</b> (click to expand)</summary>\n\n%s\n</details>' "$conflicts")"
+  else
+    conflicts_block="$(printf '## Conflicts\n%s' "$conflicts")"
+  fi
 
   PR_BODY_OUT="$(cat <<EOF
 **Cherry-pick history**
 - Pick onto **${TARGET_BRANCH}**: ${src_org}/${src_name}#${PR_NUMBER}
 
-## Conflicts resolved
-${conflicts}
+${conflicts_block}
 
 ## Original PR description
 ${body}
@@ -171,7 +178,8 @@ EOF
 )"
 
   # Labels: optionally carry the source PR's labels (minus the ones that must
-  # not propagate), then append EXTRA_LABELS and auto-resolved-conflict.
+  # not propagate), then append EXTRA_LABELS and a severity-tagged conflict
+  # label (light/heavy) when the pick had conflicts.
   local carried=""
   if [ "$CARRY_SOURCE_LABELS" = "true" ]; then
     carried="$(printf '%s\n' "$labels" | sort -u | grep '.' \
@@ -182,7 +190,13 @@ EOF
     PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}$EXTRA_LABELS"
   fi
   if [ "${OUTCOME:-}" = "conflict" ]; then
-    PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}auto-resolved-conflict"
+    local clabel
+    case "${CONFLICT_SEVERITY:-}" in
+      light) clabel="auto-pick-conflict-light" ;;
+      heavy) clabel="auto-pick-conflict-heavy" ;;
+      *)     clabel="auto-pick-conflict" ;;
+    esac
+    PR_LABELS_OUT="${PR_LABELS_OUT:+$PR_LABELS_OUT,}$clabel"
   fi
   return 0
 }

@@ -12,6 +12,10 @@
 //   SRC_PR, SRC_URL, SRC_TITLE   The source PR number, URL, title.
 //   EE_PR_URL        The created cherry-pick PR URL.
 //   OUTCOME          'clean' | 'conflict' (drives the review note).
+//   CONFLICT_SEVERITY 'light' | 'heavy' (conflict picks; shown in the DM).
+//   MODE             'picked' (default) | 'escalated'.
+//   ESCALATION_REASON short reason string (escalated mode).
+//   RUN_URL          workflow run URL (escalated mode; link for the human).
 //   TARGET_LABEL     Human label for the target (e.g. "Enterprise").
 //   TARGET_BRANCH    Target branch (e.g. "master").
 
@@ -42,14 +46,27 @@ async function main() {
     return;
   }
 
-  const note = env.OUTCOME === 'conflict'
-    ? ' (conflicts were AI-resolved -- please review the resolution)'
-    : '';
   const target = `${env.TARGET_LABEL || 'Enterprise'} ${env.TARGET_BRANCH || ''}`.trim();
   const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
   const titlePart = title ? ` (*${title}*)` : '';
-  const text = `:cherries: Your OSS PR <${env.SRC_URL}|#${env.SRC_PR}>${titlePart}`
-    + ` was auto-cherry-picked to <${env.EE_PR_URL}|${target}>${note}`;
+  const prLink = `<${env.SRC_URL}|#${env.SRC_PR}>`;
+
+  let text;
+  if (env.MODE === 'escalated') {
+    const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
+    const runPart = env.RUN_URL ? ` <${env.RUN_URL}|See the run>.` : '';
+    text = `:warning: Your OSS PR ${prLink}${titlePart} could NOT be auto-cherry-picked to ${target}: ${reason}. A human needs to finish it.${runPart}`;
+  } else {
+    let note = '';
+    if (env.OUTCOME === 'conflict') {
+      const sev = (env.CONFLICT_SEVERITY || '').toLowerCase();
+      const level = sev === 'heavy' ? 'heavy conflict' : sev === 'light' ? 'light conflict' : 'conflict';
+      const closer = sev === 'heavy' ? ' -- please review closely' : ' -- please review';
+      note = ` (${level}, AI-resolved${closer})`;
+    }
+    text = `:cherries: Your OSS PR ${prLink}${titlePart}`
+      + ` was auto-cherry-picked to <${env.EE_PR_URL}|${target}>${note}`;
+  }
 
   let data;
   try {
