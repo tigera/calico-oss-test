@@ -48,8 +48,8 @@ async function main() {
 
   const target = `${env.TARGET_LABEL || 'Enterprise'} ${env.TARGET_BRANCH || ''}`.trim();
   const title = (env.SRC_TITLE || '').replace(/[<>|*]/g, '').trim();
-  const titleLine = title ? `> _${title}_` : '';
-  const prLink = `<${env.SRC_URL}|#${env.SRC_PR}>`;
+  // Keep the PR number and its title together so the title is never orphaned.
+  const prRef = `<${env.SRC_URL}|#${env.SRC_PR}>${title ? ` *${title}*` : ''}`;
 
   // Slack mrkdwn: '\n' is a line break; keep each message a short headline plus
   // one or two detail lines rather than a run-on sentence.
@@ -58,17 +58,15 @@ async function main() {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
     const lines = [
       `:warning:  *Auto cherry-pick needs a human*`,
-      `Your OSS PR ${prLink} could not be picked to *${target}*.`,
-      titleLine,
+      `OSS PR ${prRef} could not be picked to *${target}*.`,
       `*Reason:*  ${reason}`,
-    ].filter(Boolean);
+    ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>`);
     text = lines.join('\n');
   } else {
     const lines = [
-      `:cherries:  Your OSS PR ${prLink} was auto-cherry-picked to <${env.EE_PR_URL}|*${target}*>.`,
-      titleLine,
-    ].filter(Boolean);
+      `:cherries:  Your OSS PR ${prRef} was auto-cherry-picked to <${env.EE_PR_URL}|*${target}*>.`,
+    ];
     if (env.OUTCOME === 'conflict') {
       const sev = (env.CONFLICT_SEVERITY || '').toLowerCase();
       if (sev === 'heavy') lines.push(`:warning:  *Heavy conflict*, AI-resolved. Please review closely.`);
