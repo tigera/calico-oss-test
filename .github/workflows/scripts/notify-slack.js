@@ -82,7 +82,7 @@ async function main() {
       `:warning:  Your OSS PR could NOT be auto-cherry-picked to ${targetPlain}.`,
       `*Reason:*  ${reason}.`,
     ];
-    if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run and finish it manually>.`);
+    if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run>.`);
     text = lines.join('\n');
   } else if (env.MODE === 'noop') {
     const lines = [
