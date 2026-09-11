@@ -305,6 +305,58 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
+      # 4d. Superseded / nothing to pick: the resolution produced no net change,
+      #     so no PR was opened. Tell the author it was a no-op (informational).
+      - name: Notify author (nothing to pick) on Slack
+        if: >
+          success() &&
+          steps.resolve.outputs.proceed == 'true' &&
+          steps.escalation.outputs.escalated != 'true' &&
+          steps.openpr.outputs.pr_url == '' &&
+          steps.resolve.outputs.login != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
+          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
+          AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
+          SRC_PR: ${{ steps.resolve.outputs.pr }}
+          MODE: noop
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGET_LABEL: Enterprise
+        run: |
+          if ! J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}" 2>/dev/null); then
+            echo "::warning::could not fetch source PR #${SRC_PR}; skipping DM"; exit 0
+          fi
+          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
+          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
+          node "$RUNNER_TEMP/notify-slack.js"
+
+      # 4e. Catch-all: the run failed for a reason other than a deliberate
+      #     escalation (e.g. the push was rejected). DM the author so a failed
+      #     pick is never silent. Soft (exit 0) so it cannot mask the failure.
+      - name: Notify author of failure on Slack
+        if: >
+          failure() &&
+          steps.escalation.outputs.escalated != 'true' &&
+          steps.resolve.outputs.login != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
+          PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
+          AUTHOR_LOGIN: ${{ steps.resolve.outputs.login }}
+          SRC_PR: ${{ steps.resolve.outputs.pr }}
+          MODE: escalated
+          ESCALATION_REASON: the auto-cherry-pick run failed before a PR could be opened
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGET_LABEL: Enterprise
+        run: |
+          if ! J=$(gh api "repos/${SOURCE_REPO}/pulls/${SRC_PR}" 2>/dev/null); then
+            echo "::warning::could not fetch source PR #${SRC_PR}; skipping DM"; exit 0
+          fi
+          export SRC_TITLE="$(printf '%s' "$J" | jq -r '.title')"
+          export SRC_URL="$(printf '%s' "$J" | jq -r '.html_url')"
+          node "$RUNNER_TEMP/notify-slack.js"
+
       # 5. Always: a one-line summary of what happened.
       - name: Summary
         if: always()
