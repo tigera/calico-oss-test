@@ -228,20 +228,42 @@ machine-readable) and only label the **changed** comments (the diff tool's only-
 sets) since stable comments keep prior labels. Downside: human bandwidth. Refine later (same
 labelers, blind to which iteration, etc.). This is the path to the single numeric score.
 
-## First results (2026-06-23)
-First orchestrator eval, v1 (no orch) vs v2 (orch), personas held at gpt-5.
-- **Orchestrator validated on #238** (its keep/drop log): dropped **8 of 32** inline comments —
-  exactly the redundant clusters humans complained about (the connlimit double-decrement race
-  3→1, the unused `ct_value_clear_flags` macro 3→1, the ~30s/~60s comment mismatch, the
-  sleep-in-Eventually nit). Cross-persona, clarity-first survivor, real reasons. Works as designed.
-- **Variance dominates the v1-vs-v2 diff** (as predicted): #218↔#238 share only 6 of 35/24;
-  #200→#240 went *up* +6. So the eval tool's diff shows *what changed*, but the orchestrator's own
-  keep/drop log is the trustworthy attribution signal.
-- **Timeout problem (2 of 3 runs):** #240 orchestrator hit its 600s poll cap → graceful post-all
-  (0 dropped); #241 the whole **job hit `timeout-minutes: 15`** → cancelled → 0 comments posted.
-  The orchestrator adds a serial call, so the 15-min job cap can now kill the job *before* the
-  orchestrator's own graceful degradation kicks in. **Fix: raise job `timeout-minutes`** (≥ personas
-  worst-case ~8m + orchestrator poll 10m + posting → ~25-30m) so graceful degradation has room.
+## Iteration 1 results — orchestrator (2026-06-24) ✅ VALIDATED
+Eval method: orchestrator's own keep/drop decisions (Actions log) on three v2 PRs (orchestrator on
+claude-opus-4-8; personas on gpt-5, matching the labeled baselines). The v1-vs-v2 *diff* is
+variance-dominated (#218↔#238 shared only 6 of 35/24; #200→#240 even went +6), so the keep/drop log
+is the trustworthy attribution signal — not the diff.
+
+| v2 PR | input → posted | dropped | reduction |
+|---|---|---|---|
+| #238 (calico#12602) | 32 → 24 | 8 | 25% |
+| #241 (calico#12451) | 42 → 23 | 19 | 45% |
+| #240 (calico#12960) | 23 → 13 | 10 | 43% |
+| **total** | **97 → 60** | **37** | **~38%** |
+
+**~38% of inline volume removed as redundant, with substantive findings preserved.** Each dropped
+cluster is one coherent point that 2–4 *different* personas independently raised — exactly the
+multi-persona redundancy the team complained about. Representative collapses:
+- #241 case-sensitivity (`EqualFold`): keep Casey, drop Correctness + Nell (3→1).
+- #241 duplicated docker helper: keep Nell, drop Maintainability ×2 + Nell (4→1).
+- #238 connlimit double-decrement race: keep Security, drop Correctness + Nell (3→1).
+- #240 racy `Eventually`: keep Casey, drop Correctness + Maintainability (3→1).
+- Within-persona too: #241 copyright-year nit — Maintainability said it 4×, collapsed to 1.
+
+Survivor selection behaves as designed (clarity-first): keeps Security/Correctness for genuine
+bug/security points (e.g. #240 interval-bound → Security; #241 AllowedUses → Security), human voices
+elsewhere. **One cross-lens merge to human-spot-check:** #240 `keep maintainability-3, drop
+security-2` (ticker/clock vs manual `time.Since`) — plausibly the same point, but dropping a
+Security-authored comment is exactly what the future human-labeling loop should verify.
+
+**Operational notes:** #240 hung the orchestrator on three earlier runs (~20:10–00:58) but completed
+first-attempt at 02:05 → looks like transient kagent load, not payload (its input was the *smallest*
+of the three). Fixes shipped along the way: job `timeout-minutes` 15→30 (#242); orchestrator
+fresh-task retry + richer error diagnostics + RUN_ATTEMPT-in-msgId (#244).
+
+**Verdict: orchestrator iteration validated.** Next: Lever-2 persona-prompt tweaks (gate
+Maintainability's reflexive test-asks; recalibrate Nell/Casey toward their real substance-first
+style), evaluated the same way against these v2 PRs as the new baseline.
 
 ## Iteration 2 (Lever-2 persona prompts) — PRELIMINARY (2026-06-24)
 **Caveat: a single PR pair, one run each — directional only, not definitive.** An `ITER` mix-up
