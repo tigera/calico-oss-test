@@ -1,0 +1,3 @@
+# file 4
+setting = oss-value-4
+shared_line = keep-me
