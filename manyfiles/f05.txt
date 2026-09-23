@@ -1,3 +1,4 @@
-# file 5
-setting = oss-value-5
+# file 05
+setting = oss-value-05 (UPDATED upstream)
 shared_line = keep-me
+new_feature = enabled

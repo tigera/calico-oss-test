@@ -1,3 +1,4 @@
-# file 4
-setting = oss-value-4
+# file 04
+setting = oss-value-04 (UPDATED upstream)
 shared_line = keep-me
+new_feature = enabled

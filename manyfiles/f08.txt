@@ -1,3 +1,4 @@
-# file 8
-setting = oss-value-8
+# file 08
+setting = oss-value-08 (UPDATED upstream)
 shared_line = keep-me
+new_feature = enabled
