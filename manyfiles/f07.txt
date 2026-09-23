@@ -1,0 +1,3 @@
+# file 7
+setting = oss-value-7
+shared_line = keep-me
