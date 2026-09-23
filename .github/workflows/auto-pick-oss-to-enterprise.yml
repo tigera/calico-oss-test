@@ -91,21 +91,6 @@ jobs:
           MERGE_SHA: ${{ steps.resolve.outputs.sha }}
         run: bash "$RUNNER_TEMP/oss-pick.sh" pick
 
-      # TEMP isolation test: plant sentinels the way a compromised agent could,
-      # to prove none of them reach Job B's fresh runner. REMOVE after validating.
-      - name: TEST plant sentinels
-        if: steps.resolve.outputs.proceed == 'true'
-        run: |
-          echo "planted-in-job-A-${GITHUB_RUN_ID}" > "$RUNNER_TEMP/ISOLATION_SENTINEL"
-          echo "# TAMPERED-BY-JOB-A" >> "$RUNNER_TEMP/oss-pick.sh"
-          git config --global test.isolationSentinel "planted-${GITHUB_RUN_ID}"
-          git config --global "url.https://evil.example/.insteadOf" "https://placeholder.invalid/"
-          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
-            printf '#!/bin/sh\necho PLANTED-PRE-PUSH\n' > "$GITHUB_WORKSPACE/.git/hooks/pre-push"
-            chmod +x "$GITHUB_WORKSPACE/.git/hooks/pre-push" || true
-          fi
-          echo "planted sentinels (RUNNER_TEMP, ~/.gitconfig insteadOf, pre-push hook, tampered oss-pick.sh)"
-
       - name: Prepare change context
         if: steps.resolve.outputs.proceed == 'true' && steps.pick.outputs.outcome == 'conflict'
         env:
@@ -288,19 +273,6 @@ jobs:
               --jq '.content' | base64 -d > "$RUNNER_TEMP/${f}"
           done
           chmod +x "$RUNNER_TEMP/oss-pick.sh"
-
-      # TEMP isolation test: prove none of Job A's sentinels reached this runner
-      # (fresh VM), so the write token here is unreachable to what the agent
-      # planted. REMOVE with the Job A plant step after validating.
-      - name: TEST assert isolation
-        run: |
-          fail=0
-          if [ -e "$RUNNER_TEMP/ISOLATION_SENTINEL" ]; then echo "::error::RUNNER_TEMP sentinel LEAKED into Job B"; fail=1; else echo "OK: no RUNNER_TEMP sentinel"; fi
-          if git config --global --get test.isolationSentinel >/dev/null 2>&1; then echo "::error::~/.gitconfig sentinel LEAKED into Job B"; fail=1; else echo "OK: no ~/.gitconfig sentinel"; fi
-          if git config --global --get-regexp '^url\.https://evil' >/dev/null 2>&1; then echo "::error::insteadOf redirect LEAKED into Job B"; fail=1; else echo "OK: no evil insteadOf"; fi
-          if grep -q 'TAMPERED-BY-JOB-A' "$RUNNER_TEMP/oss-pick.sh"; then echo "::error::oss-pick.sh is Job A's tampered copy"; fail=1; else echo "OK: oss-pick.sh is the fresh trusted copy"; fi
-          [ "$fail" = 0 ] && echo "ISOLATION PROVEN: Job B runner is clean of everything Job A planted."
-          exit $fail
 
       - name: Download pick artifact
         if: needs.pick.outputs.export == 'ready'
