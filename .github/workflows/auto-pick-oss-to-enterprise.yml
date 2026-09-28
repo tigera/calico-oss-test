@@ -374,7 +374,7 @@ jobs:
       # Claude step in this job, but keeping the pattern avoids a future slip.)
       GH_TOKEN: ${{ github.token }}
       TARGET_LABEL: calico-private
-      PICK_NOTIFY_MAP: ${{ vars.SLACK_NOTIFY_MAP }}
+      PICK_NOTIFY_MAP: ${{ vars.PICK_NOTIFY_MAP }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Fetch scripts
@@ -411,7 +411,7 @@ jobs:
           needs.pick.outputs.escalated != 'true' &&
           needs.pick.outputs.export == 'ready'
         env:
-          TARGET_TOKEN: ${{ secrets.TIGERA_BOT_PAT }}
+          TARGET_TOKEN: ${{ secrets.TEST_GH_TOKEN_CLASSIC }}
           SOURCE_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.pick.outputs.pr }}
           MERGE_SHA: ${{ needs.pick.outputs.sha }}
