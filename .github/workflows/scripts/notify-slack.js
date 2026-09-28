@@ -8,7 +8,8 @@
 //                    chat.postMessage with channel=<user-id> directly, like the
 //                    merge-queue-bot (no conversations.open / im:write needed).
 //   PICK_NOTIFY_MAP  "login:slack-id,login:slack-id,..." opt-in map.
-//   AUTHOR_LOGIN     GitHub login of the original PR author.
+//   AUTHOR_LOGIN     GitHub login to DM (the PR author, or its merger).
+//   NOTIFY_AS        'author' (default) | 'merger' (escalated mode wording).
 //   SOURCE_REPO, SRC_PR   The source repo and PR number. SRC_URL is derived
 //                    from them, and SRC_TITLE is fetched via `gh` (best-effort),
 //                    unless either is passed in explicitly.
@@ -18,10 +19,12 @@
 //   MODE             'picked' (default) | 'escalated'.
 //   ESCALATION_REASON short reason string (escalated mode).
 //   RUN_URL          workflow run URL (escalated mode; link for the human).
+//   REPORT_FILE      resolution report appended in escalated mode, if present.
 //   TARGET_LABEL     Human label for the target (e.g. "Enterprise").
 //   TARGET_BRANCH    Target branch (e.g. "master").
 
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 
 const env = process.env;
 
@@ -33,6 +36,19 @@ function slackIdFor(login, map) {
     if (s.slice(0, i).trim() === login) return s.slice(i + 1).trim();
   }
   return '';
+}
+
+// Agent-written text: a code block keeps Slack from rendering links or mentions in it.
+function readReport(path) {
+  if (!path) return '';
+  let s;
+  try {
+    s = fs.readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+  s = s.replace(/```/g, "'''").trim();
+  return s.length > 2800 ? `${s.slice(0, 2800)}\n[truncated]` : s;
 }
 
 async function main() {
@@ -79,10 +95,12 @@ async function main() {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
     const lines = [
       `#${env.SRC_PR} ${osTag}${titlePart}`,
-      `:warning:  Your OSS PR could NOT be auto-cherry-picked to ${targetPlain}.`,
+      `:warning:  ${env.NOTIFY_AS === 'merger' ? 'The OSS PR you merged' : 'Your OSS PR'} could NOT be auto-cherry-picked to ${targetPlain}.`,
       `*Reason:*  ${reason}.`,
     ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run>.`);
+    const report = readReport(env.REPORT_FILE);
+    if (report) lines.push('*Resolution report:*', '```', report, '```');
     text = lines.join('\n');
   } else if (env.MODE === 'noop') {
     const lines = [
