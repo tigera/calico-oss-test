@@ -97,6 +97,14 @@ function main() {
     return;
   }
 
+  // Opt-out: the skip-bot-cherry-pick label means "do not pick this PR". Gate
+  // here, before any clone or cherry-pick, and stay silent (no DM).
+  const labels = (j.labels || []).map((l) => l && l.name);
+  if (labels.includes('skip-bot-cherry-pick')) {
+    skip(`PR #${pr} has the skip-bot-cherry-pick label`);
+    return;
+  }
+
   const merger = (j.merged_by && j.merged_by.login) || '';
   const trusted = isOrgMember(login);
   console.log(`Resolved merged PR #${pr} (merge ${sha}, author ${login}, ` +
