@@ -260,6 +260,32 @@ jobs:
             resolution a reviewer should scrutinize closely (lower-confidence
             merges, behavioural changes, anything non-obvious).
 
+      # 2a-test. Diagnose + finalize: the agent resolves file contents, but the
+      #     cherry-pick was left in progress. Dump the state, then, if the tree
+      #     is cleanly resolved (no markers), complete the commit on the agent's
+      #     behalf so it does not depend on the agent running git correctly.
+      - name: Finalize the cherry-pick (test diagnostic)
+        if: >
+          steps.resolve.outputs.proceed == 'true' &&
+          steps.pick.outputs.outcome == 'conflict' &&
+          steps.claude.outcome == 'success'
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          echo "=== post-agent git state ==="
+          git status --porcelain=v1 | head -30
+          echo "cherry-pick in progress: $([ -e .git/CHERRY_PICK_HEAD ] && echo YES || echo no)"
+          echo "severity file: $(cat /tmp/pick-severity 2>/dev/null || echo MISSING)"
+          echo "report present: $([ -s /tmp/resolution-report.md ] && echo yes || echo no)"
+          if [ -e .git/CHERRY_PICK_HEAD ]; then
+            if git grep -qE '^(<<<<<<<|>>>>>>>)( |$)' -- . ; then
+              echo "::warning::conflict markers remain; leaving for the export guard to reject"
+            else
+              echo "no markers; completing the cherry-pick from the workflow"
+              git add -A
+              GIT_EDITOR=true git cherry-pick --continue && echo "FINALIZED by workflow"
+            fi
+          fi
+
       # 2b. Read Claude's outcome: the escalation marker, the severity verdict,
       #     and whether Claude finished at all. A deliberate escalation (marker)
       #     OR an unfinished run (turn limit / error, claude.outcome != success)
