@@ -1,27 +1,21 @@
 #!/usr/bin/env bash
 #
-# Generic cherry-pick engine for CI, split across two jobs so the write token
-# never shares a runner with the conflict-resolution agent. Hardcodes no repos:
-# the calling workflow supplies the flow (one source/target per invocation).
+# Generic cherry-pick engine, split across two jobs so the write token never
+# shares a runner with the conflict-resolution agent. Repos come from the caller.
 #
-# Three subcommands, run across two jobs:
-#   pick    (Job A, READ token) clone target, cherry-pick (-x) the commit; leave
-#           conflicts in the tree for Claude. Emits outcome=clean|conflict|empty|already.
-#   export  (Job A, no token)   verify the resolved tree, then `git format-patch`
-#           it into EXPORT_DIR plus the report/severity/meta for the artifact.
-#           Emits export=ready|noop.
-#   apply   (Job B, WRITE token, FRESH runner) fresh-clone target, `git am` the
-#           patch from EXPORT_DIR, build the PR body/labels, push, open the PR.
-#           Job B is a clean runner the agent never touched, so no hook /
-#           insteadOf / $RUNNER_TEMP overwrite it planted can reach the token.
+#   pick    (Job A, READ token) clone, cherry-pick -x, leave conflicts for Claude.
+#           Emits outcome=clean|conflict|empty|already.
+#   export  (Job A, no token)   git format-patch the resolved tree (+ report) into
+#           EXPORT_DIR. Emits export=ready|noop.
+#   apply   (Job B, WRITE token, fresh runner) fresh-clone, git am the patch,
+#           build the PR body/labels, push, open the PR.
 #
 # Common env: SOURCE_REPO TARGET_REPO TARGET_BRANCH PR_NUMBER MERGE_SHA
-# pick  env : TARGET_TOKEN(read) SOURCE_TOKEN(=TARGET_TOKEN) WORKDIR(=PWD)
-# export env: EXPORT_DIR(=/tmp/pick-export) OUTCOME RESOLUTION_REPORT
-#             CONFLICT_SEVERITY WORKDIR(=PWD)
-# apply env : TARGET_TOKEN(write) SOURCE_TOKEN EXPORT_DIR WORKDIR EXTRA_LABELS
-#             CARRY_SOURCE_LABELS(=true) TITLE_PREFIX OUTCOME CONFLICT_SEVERITY
-# Optional  : SOURCE_REF(=master) BRANCH_NAME
+# pick/apply: TARGET_TOKEN (read for pick, write for apply), SOURCE_TOKEN
+# export    : EXPORT_DIR OUTCOME CONFLICT_SEVERITY RESOLUTION_REPORT
+# apply     : EXPORT_DIR EXTRA_LABELS TITLE_PREFIX OUTCOME CONFLICT_SEVERITY
+# Optional  : SOURCE_REF(=master) BRANCH_NAME WORKDIR(=PWD) CARRY_SOURCE_LABELS(=true)
+#             PICK_PATHS_FILE(=$RUNNER_TEMP/pick-paths, outside the agent's reach)
 set -o errexit -o nounset -o pipefail
 
 : "${SOURCE_REPO:?}" "${TARGET_REPO:?}" "${TARGET_BRANCH:?}"
@@ -32,6 +26,7 @@ CARRY_SOURCE_LABELS="${CARRY_SOURCE_LABELS:-true}"
 WORKDIR="${WORKDIR:-$PWD}"
 EXPORT_DIR="${EXPORT_DIR:-/tmp/pick-export}"
 TITLE_PREFIX="${TITLE_PREFIX-__DERIVE__}"
+PICK_PATHS_FILE="${PICK_PATHS_FILE:-${RUNNER_TEMP:-/tmp}/pick-paths}"
 
 src_org="${SOURCE_REPO%%/*}"; src_name="${SOURCE_REPO##*/}"
 
@@ -91,9 +86,10 @@ do_pick() {
   fi
 
   if [ "$rc" -eq 0 ]; then
-    echo "Clean cherry-pick."; emit "outcome=clean"
+    echo "Clean cherry-pick."; record_pick_paths HEAD~1 HEAD; emit "outcome=clean"
   elif git diff --name-only --diff-filter=U | grep -q .; then
-    echo "Conflicts:"; git diff --name-only --diff-filter=U; emit "outcome=conflict"
+    echo "Conflicts:"; git diff --name-only --diff-filter=U
+    record_pick_paths HEAD; emit "outcome=conflict"
   else
     echo "Cherry-pick empty (already present / superseded)."
     git cherry-pick --abort || true; emit "outcome=empty"
@@ -104,11 +100,22 @@ do_pick() {
 # Job A: export (no token). Turn the resolved commit into a portable patch plus
 # the report/severity/meta, so Job B can rebuild it on a clean runner.
 # ---------------------------------------------------------------------------
+# The paths a resolution may touch: git's own pick (which follows renames into
+# Enterprise paths) plus the OSS change's paths, some of which Enterprise lacks.
+record_pick_paths() {
+  { git diff --name-only "$@"; git diff --name-only "${MERGE_SHA}^1" "$MERGE_SHA"; } |
+    sort -u > "$PICK_PATHS_FILE"
+}
+
 do_export() {
   cd "$WORKDIR"
   # An unfinished cherry-pick or leftover markers is real breakage.
   if [ -e .git/CHERRY_PICK_HEAD ]; then
     echo "::error::cherry-pick still in progress; refusing to export"; exit 1
+  fi
+  # format-patch exports HEAD, so a fix left only in the working tree would be dropped.
+  if ! git diff --quiet HEAD; then
+    echo "::error::resolution left uncommitted changes; refusing to export"; exit 1
   fi
   # No NET change over the base means the OSS change was fully superseded once
   # resolved: a legitimate "nothing to pick", not an error.
@@ -116,28 +123,40 @@ do_export() {
     echo "::notice::resolution produced no net change over origin/${TARGET_BRANCH}; nothing to pick"
     emit "export=noop"; return 0
   fi
-  local f
-  while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    if grep -qE '^(<<<<<<<|>>>>>>>)' "$f"; then
-      echo "::error::conflict markers remain in $f; refusing to export"; exit 1
-    fi
-  done < <(git diff --name-only "origin/${TARGET_BRANCH}..HEAD")
+  # The pick makes exactly one commit, and a resolution stays within its paths.
+  local ncommits extra
+  ncommits="$(git rev-list --count "origin/${TARGET_BRANCH}..HEAD")"
+  if [ "$ncommits" -ne 1 ]; then
+    echo "::error::expected 1 commit over origin/${TARGET_BRANCH}, found ${ncommits}; refusing to export"; exit 1
+  fi
+  if [ ! -s "$PICK_PATHS_FILE" ]; then
+    echo "::error::pick path list $PICK_PATHS_FILE missing; refusing to export"; exit 1
+  fi
+  extra="$(git diff --name-only "origin/${TARGET_BRANCH}..HEAD" | sort -u | comm -23 - "$PICK_PATHS_FILE")"
+  if [ -n "$extra" ]; then
+    echo "::error::resolution touches paths the pick did not; refusing to export"
+    echo "$extra"; exit 1
+  fi
+  # Check the commit being exported, not the files on disk.
+  local changed markers rc=0
+  mapfile -t changed < <(git diff --name-only "origin/${TARGET_BRANCH}..HEAD")
+  markers="$(git grep -nE '^(<<<<<<<|>>>>>>>)( |$)' HEAD -- "${changed[@]}")" || rc=$?
+  case "$rc" in
+    0) echo "::error::conflict markers remain in the commit; refusing to export"
+       echo "$markers" | cut -d: -f2,3; exit 1 ;;
+    1) ;;
+    *) echo "::error::marker check failed (git grep exit $rc); refusing to export"; exit 1 ;;
+  esac
 
   rm -rf "$EXPORT_DIR"; mkdir -p "$EXPORT_DIR/patches"
-  git format-patch --no-signature -o "$EXPORT_DIR/patches" "origin/${TARGET_BRANCH}..HEAD" >/dev/null
+  git format-patch -k --no-signature -o "$EXPORT_DIR/patches" "origin/${TARGET_BRANCH}..HEAD" >/dev/null
   if ! ls "$EXPORT_DIR"/patches/*.patch >/dev/null 2>&1; then
     echo "::notice::no commits to export; nothing to pick"; emit "export=noop"; return 0
   fi
-  # Carry the report + severity + a bit of meta for Job B (all treated as data).
+  # Carry the AI resolution report for Job B's PR body (treated as data).
   if [ -n "${RESOLUTION_REPORT:-}" ] && [ -s "$RESOLUTION_REPORT" ]; then
     cp "$RESOLUTION_REPORT" "$EXPORT_DIR/report.md"
   fi
-  {
-    echo "BRANCH_NAME=$BRANCH_NAME"
-    echo "OUTCOME=${OUTCOME:-}"
-    echo "CONFLICT_SEVERITY=${CONFLICT_SEVERITY:-}"
-  } > "$EXPORT_DIR/meta.env"
   echo "exported $(ls "$EXPORT_DIR"/patches/*.patch | wc -l) patch(es) to $EXPORT_DIR"
   emit "export=ready"
 }
@@ -153,7 +172,9 @@ build_pr_text() {
   body="$(jq -r '.body // ""' <<<"$pj")"
   labels="$(jq -r '.labels[].name' <<<"$pj")"
 
-  local stripped; stripped="$(printf '%s' "$title" | sed 's/^\[.*\] //')"
+  # Drop only an earlier pick's branch tag; other tags (Jira keys, areas) stay.
+  local stripped
+  stripped="$(printf '%s' "$title" | sed -E 's/^\[(master|v[0-9]+\.[0-9]+(\.[0-9]+)?|release-[^]]*)\] //')"
   if [ "$SOURCE_REPO" != "$TARGET_REPO" ]; then
     body="$(printf '%s' "$body" | sed "s/\([^a-zA-Z0-9_.-]\|^\)#\([0-9]\+\)/\1${src_org}\/${src_name}#\2/g")"
   fi
@@ -272,7 +293,7 @@ do_apply() {
   git checkout -b "$BRANCH_NAME" "origin/${TARGET_BRANCH}"
   # Apply the resolved commit. If the base moved and it no longer applies, fail
   # loudly rather than pushing a broken tree.
-  if ! git am "$EXPORT_DIR"/patches/*.patch; then
+  if ! git am -k "$EXPORT_DIR"/patches/*.patch; then
     git am --abort || true
     echo "::error::patch no longer applies onto origin/${TARGET_BRANCH} (base moved?); re-run the pick"; exit 1
   fi
