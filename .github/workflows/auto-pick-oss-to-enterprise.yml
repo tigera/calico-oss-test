@@ -1,5 +1,7 @@
-# OSS master -> Enterprise master auto-pick. Runs on push to master, so it runs
-# master's own workflow code and GitHub never holds it for approval.
+# OSS master -> Enterprise master auto-pick. A push-triggered stage-1 workflow
+# fires this via workflow_run, so it runs master's own trusted workflow code,
+# GitHub never holds it for approval, and the Claude action gets a supported
+# (workflow_run) event -- claude-code-action rejects a raw `push` event.
 #
 # Two jobs, so the write token never shares a runner with the Claude agent:
 #   pick    (Job A) clone (READ token) + cherry-pick + Claude resolve, then export
@@ -18,8 +20,9 @@
 name: Auto-pick OSS PR into Enterprise
 
 on:
-  push:
-    branches: [master]
+  workflow_run:
+    workflows: ["Auto-pick OSS PR into Enterprise (trigger)"]
+    types: [completed]
 
 # Least privilege: every target write (push, gh pr create, labels) uses
 # TIGERA_BOT_PAT in Job B; github.token is read-only here (source reads, the
@@ -29,8 +32,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # PR number is unknown until the resolve step; key on the pushed commit.
-  group: auto-pick-oss-${{ github.sha }}
+  # PR number is unknown until the resolve step; key on the triggering commit.
+  group: auto-pick-oss-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 env:
@@ -47,8 +50,12 @@ jobs:
   # Job A: resolve + pick + Claude + export. READ-ONLY target token, no Slack.
   # =========================================================================
   pick:
-    # Forks syncing master must not run it; they have no secrets.
-    if: github.repository == 'tigera/calico-oss-test'
+    # Only a successful push-triggered stage-1 run, and only on this repo
+    # (forks syncing master have no secrets).
+    if: >
+      github.repository == 'tigera/calico-oss-test' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -94,7 +101,7 @@ jobs:
       - name: Resolve merged PR
         id: resolve
         env:
-          MERGE_SHA: ${{ github.sha }}
+          MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
           BASE_REF: ${{ env.SOURCE_REF }}
           MEMBER_ORG: tigera
           MEMBER_TOKEN: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
