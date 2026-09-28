@@ -153,6 +153,16 @@ jobs:
       # 2. Claude resolves conflicts ONLY (edits + git add + cherry-pick
       #    --continue). No push, no PR, no write token in scope. Cross-fork
       #    intent: keep the Enterprise side.
+      # claude-code-action runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, which
+      # needs bubblewrap to sandbox the agent's subprocesses; ubuntu-latest does
+      # not ship it, so install it before the agent runs.
+      - name: Install bubblewrap
+        if: >
+          steps.resolve.outputs.proceed == 'true' &&
+          steps.resolve.outputs.trusted == 'true' &&
+          steps.pick.outputs.outcome == 'conflict'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Claude resolves the conflict
         id: claude
         if: >
