@@ -67,7 +67,10 @@ async function main() {
   // invisible even when the author is unmapped or unknown.
   const author = env.AUTHOR_LOGIN || '';
   const slackId = author ? slackIdFor(author, map) : '';
-  const alertChannel = (env.MODE === 'escalated' && env.ALERT_CHANNEL) ? env.ALERT_CHANNEL : '';
+  // Mirror every non-success outcome (escalation, failure, noop) to the alert
+  // channel; the plain "picked" success only DMs the author.
+  const mirrorToChannel = env.MODE === 'escalated' || env.MODE === 'noop';
+  const alertChannel = (mirrorToChannel && env.ALERT_CHANNEL) ? env.ALERT_CHANNEL : '';
   if (!slackId && !alertChannel) {
     console.log(`::notice::author ${author || '(none)'} not in PICK_NOTIFY_MAP and no alert channel -- skipping`);
     return;

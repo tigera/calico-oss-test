@@ -103,7 +103,7 @@ jobs:
         env:
           MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
           BASE_REF: ${{ env.SOURCE_REF }}
-          MEMBER_ORG: zz-nonexistent-org-for-testing
+          MEMBER_ORG: tigera
           MEMBER_TOKEN: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
         run: node "$RUNNER_TEMP/resolve-merged-pr.js"
 
@@ -481,6 +481,8 @@ jobs:
         run: node "$RUNNER_TEMP/notify-slack.js"
 
       # Nothing to pick (superseded / empty / already): informational DM.
+      # Also mirror the noop to #test-merge-cat-errors (every non-success outcome
+      # goes to the channel), even when the author is unmapped.
       - name: Notify author (nothing to pick) on Slack
         if: >
           success() &&
@@ -488,10 +490,10 @@ jobs:
           needs.pick.outputs.proceed == 'true' &&
           needs.pick.outputs.escalated != 'true' &&
           needs.pick.outputs.export != 'ready' &&
-          steps.openpr.outputs.pr_url == '' &&
-          needs.pick.outputs.login != ''
+          steps.openpr.outputs.pr_url == ''
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_MERGE_CAT_TOKEN }}
+          ALERT_CHANNEL: C0B45TXSG8G
           AUTHOR_LOGIN: ${{ needs.pick.outputs.login }}
           SRC_PR: ${{ needs.pick.outputs.pr }}
           MODE: noop
