@@ -1,4 +1,4 @@
 # Cherry-pick conflict demo
 component: shared
-timeout_seconds: 150
+timeout_seconds: 200
 mode: standard
