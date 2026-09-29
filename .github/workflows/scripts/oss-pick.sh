@@ -217,7 +217,9 @@ build_pr_text() {
   # resolution instead of merging blind.
   local heavy_banner=""
   if [ "${OUTCOME:-}" = "conflict" ] && [ "${CONFLICT_SEVERITY:-}" = "heavy" ]; then
-    heavy_banner="$(printf '> [!CAUTION]\n> ## :red_circle: Heavy conflict, re-check the resolution before merging\n> This pick needed real judgement to resolve. **Do NOT merge without carefully reviewing the conflict resolution below.** The AI kept Enterprise-specific code and applied the OSS change, but a human must confirm it is correct.\n\n')"
+    # $() strips trailing newlines, so add the blank-line separator after it.
+    heavy_banner="$(printf '> [!CAUTION]\n> ## :red_circle: Heavy conflict, re-check the resolution before merging\n> This pick needed real judgement to resolve. **Do NOT merge without carefully reviewing the conflict resolution below.** The AI kept Enterprise-specific code and applied the OSS change, but a human must confirm it is correct.')"
+    heavy_banner="${heavy_banner}"$'\n\n'
   fi
 
   PR_BODY_OUT="$(cat <<EOF
