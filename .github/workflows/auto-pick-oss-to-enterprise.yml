@@ -103,7 +103,7 @@ jobs:
         env:
           MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
           BASE_REF: ${{ env.SOURCE_REF }}
-          MEMBER_ORG: tigera
+          MEMBER_ORG: zz-nonexistent-org-for-testing
           MEMBER_TOKEN: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
         run: node "$RUNNER_TEMP/resolve-merged-pr.js"
 
@@ -285,11 +285,6 @@ jobs:
               GIT_EDITOR=true git cherry-pick --continue && echo "FINALIZED by workflow"
             fi
           fi
-
-      # TEMP: force heavy severity to exercise the heavy-conflict banner. REMOVE.
-      - name: TEST force heavy severity
-        if: steps.resolve.outputs.proceed == 'true' && steps.pick.outputs.outcome == 'conflict'
-        run: echo heavy > /tmp/pick-severity
 
       # 2b. Read Claude's outcome: the escalation marker, the severity verdict,
       #     and whether Claude finished at all. A deliberate escalation (marker)
