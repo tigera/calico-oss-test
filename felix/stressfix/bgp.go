@@ -14,7 +14,7 @@ type BgpController struct {
 
 // NewBgpController builds a bgp controller with the enabled feature set.
 func NewBgpController() (*BgpController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_bgp"}
 	c := &BgpController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }
