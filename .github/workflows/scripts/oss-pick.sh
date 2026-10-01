@@ -325,7 +325,7 @@ build_pr_text() {
         conflict_banner="$(printf '> [!CAUTION]\n> ## :red_circle: Heavy conflict, re-check the resolution before merging\n> This pick needed real judgement to resolve. **Do NOT merge without carefully reviewing the conflict resolution below.** The AI kept Enterprise-specific code and applied the OSS change, but a human must confirm it is correct.')"
         ;;
       light)
-        conflict_banner="$(printf '> [!WARNING]\n> ## :large_yellow_circle: Light conflict, review the resolution before merging\n> This pick had a small conflict that the AI resolved. **Give the conflict resolution below a quick review before merging** to confirm it kept the right Enterprise code.')"
+        conflict_banner="$(printf '> [!WARNING]\n> ## :yellow_circle: Light conflict, review the resolution before merging\n> This pick had a small conflict that the AI resolved. **Give the conflict resolution below a quick review before merging** to confirm it kept the right Enterprise code.')"
         ;;
     esac
     [ -n "$conflict_banner" ] && conflict_banner="${conflict_banner}"$'\n\n'
