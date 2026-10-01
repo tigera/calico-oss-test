@@ -187,10 +187,13 @@ type Config struct {
 	WireguardThreadingEnabled      bool          `config:"bool;false"`
 
 	// nftables configuration.
-	NFTablesMode string `config:"oneof(Enabled,Disabled,Auto);Auto"`
+	NFTablesMode                      string         `config:"oneof(Enabled,Disabled,Auto);Auto"`
+	NFTablesFlowTableOffload          string         `config:"oneof(All,Disabled);Disabled"`
+	NFTablesFlowTableDataIfacePattern *regexp.Regexp `config:"regexp(nil-on-empty);"`
 
 	// BPF configuration.
 	BPFEnabled                         bool              `config:"bool;false"`
+	BPFOverlayHostSourceIP             string            `config:"oneof(TunnelAddress,HostAddress);TunnelAddress;non-zero"`
 	BPFDisableUnprivileged             bool              `config:"bool;true"`
 	BPFJITHardening                    string            `config:"oneof(Auto,Strict);Auto;non-zero"`
 	BPFLogLevel                        string            `config:"oneof(off,info,debug);off;non-zero"`
@@ -230,7 +233,7 @@ type Config struct {
 	BPFDisableGROForIfaces             *regexp.Regexp    `config:"regexp;"`
 	BPFExcludeCIDRsFromNAT             []string          `config:"cidr-list;;"`
 	BPFRedirectToPeer                  string            `config:"oneof(Disabled,Enabled,L2Only);Enabled;non-zero"`
-	BPFAttachType                      string            `config:"oneof(TCX,TC);TCX;non-zero"`
+	BPFAttachType                      string            `config:"oneof(Netkit,TCX,TC);Netkit;non-zero"`
 	BPFExportBufferSizeMB              int               `config:"int;1;non-zero"`
 	BPFProfiling                       string            `config:"oneof(Disabled,Enabled);Disabled;non-zero"`
 
@@ -312,7 +315,7 @@ type Config struct {
 	DeviceRouteSourceAddressIPv6       net.IP            `config:"ipv6;"`
 	DeviceRouteProtocol                int               `config:"int;3"`
 	RemoveExternalRoutes               bool              `config:"bool;true"`
-	ProgramClusterRoutes               string            `config:"oneof(Enabled,Disabled);Disabled"`
+	ProgramClusterRoutes               string            `config:"oneof(Enabled,Disabled,EnabledIPIPOnly,EnabledNoEncapOnly);EnabledIPIPOnly"`
 	IPForwarding                       string            `config:"oneof(Enabled,Disabled);Enabled"`
 	IptablesRefreshInterval            time.Duration     `config:"seconds;180"`
 	IptablesPostWriteCheckIntervalSecs time.Duration     `config:"seconds;5"` //nolint:staticcheck // Ignore ST1011 don't use unit-specific suffix
@@ -598,8 +601,18 @@ func (config *Config) FlowLogsEnabled() bool {
 		config.FlowLogsLocalReporterEnabled()
 }
 
-func (config *Config) ProgramClusterRoutesEnabled() bool {
-	return config.ProgramClusterRoutes == "Enabled"
+// ProgramIPIPClusterRoutes returns whether Felix should program the cluster routes for IP Pools
+// with ipipMode Always or CrossSubnet.  When it returns false, confd and BIRD are expected to
+// program those routes instead; that is deprecated as of v3.33.
+func (config *Config) ProgramIPIPClusterRoutes() bool {
+	return config.ProgramClusterRoutes == v3.Enabled || config.ProgramClusterRoutes == v3.EnabledIPIPOnly
+}
+
+// ProgramNoEncapClusterRoutes returns whether Felix should program the cluster routes for
+// unencapsulated IP Pools (ipipMode and vxlanMode both Never).  When it returns false, confd and
+// BIRD are expected to program those routes instead.
+func (config *Config) ProgramNoEncapClusterRoutes() bool {
+	return config.ProgramClusterRoutes == v3.Enabled || config.ProgramClusterRoutes == v3.EnabledNoEncapOnly
 }
 
 // Copy makes a copy of the object.  Internal state is deep copied but config parameters are only shallow copied.
@@ -1339,5 +1352,5 @@ type Encapsulation struct {
 	IPIPEnabled    bool
 	VXLANEnabled   bool
 	VXLANEnabledV6 bool
-	NoEncapEnabled bool
+	NoEncapNeeded  bool
 }
