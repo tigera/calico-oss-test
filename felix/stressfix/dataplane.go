@@ -14,7 +14,7 @@ type DataplaneController struct {
 
 // NewDataplaneController builds a dataplane controller with the enabled feature set.
 func NewDataplaneController() (*DataplaneController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_dataplane"}
 	c := &DataplaneController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }

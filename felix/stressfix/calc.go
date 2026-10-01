@@ -14,7 +14,7 @@ type CalcController struct {
 
 // NewCalcController builds a calc controller with the enabled feature set.
 func NewCalcController() (*CalcController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_calc"}
 	c := &CalcController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }

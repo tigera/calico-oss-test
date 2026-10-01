@@ -14,7 +14,7 @@ type EndpointController struct {
 
 // NewEndpointController builds a endpoint controller with the enabled feature set.
 func NewEndpointController() (*EndpointController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_endpoint"}
 	c := &EndpointController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }
