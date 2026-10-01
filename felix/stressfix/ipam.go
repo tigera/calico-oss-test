@@ -14,7 +14,7 @@ type IpamController struct {
 
 // NewIpamController builds a ipam controller with the enabled feature set.
 func NewIpamController() (*IpamController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_ipam"}
 	c := &IpamController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }

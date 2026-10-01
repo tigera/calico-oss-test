@@ -14,7 +14,7 @@ type RoutesController struct {
 
 // NewRoutesController builds a routes controller with the enabled feature set.
 func NewRoutesController() (*RoutesController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_routes"}
 	c := &RoutesController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }

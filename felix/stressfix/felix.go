@@ -14,7 +14,7 @@ type FelixController struct {
 
 // NewFelixController builds a felix controller with the enabled feature set.
 func NewFelixController() (*FelixController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_felix"}
 	c := &FelixController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }
