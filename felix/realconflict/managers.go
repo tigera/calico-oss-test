@@ -12,5 +12,6 @@ func allManagers() []manager {
 	return []manager{
 		newPolicyManager(),
 		newRouteManager(),
+		newNFTablesManager(), // new in OSS
 	}
 }

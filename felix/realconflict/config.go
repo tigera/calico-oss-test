@@ -4,4 +4,5 @@ package realconflict
 // Config holds Felix configuration.
 type Config struct {
 	MaxIPSetSize int
+	NFTablesMode bool // new in OSS
 }
