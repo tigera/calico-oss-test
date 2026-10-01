@@ -14,7 +14,7 @@ type WireguardController struct {
 
 // NewWireguardController builds a wireguard controller with the enabled feature set.
 func NewWireguardController() (*WireguardController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_wireguard"}
 	c := &WireguardController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }

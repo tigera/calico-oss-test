@@ -14,7 +14,7 @@ type NatController struct {
 
 // NewNatController builds a nat controller with the enabled feature set.
 func NewNatController() (*NatController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_nat"}
 	c := &NatController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }
