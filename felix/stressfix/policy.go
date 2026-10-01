@@ -14,7 +14,7 @@ type PolicyController struct {
 
 // NewPolicyController builds a policy controller with the enabled feature set.
 func NewPolicyController() (*PolicyController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_policy"}
 	c := &PolicyController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }
