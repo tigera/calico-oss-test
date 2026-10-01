@@ -1,2 +1,2 @@
 # auto-pick conflict fixture
-features: a,b,c
+features: a,b,enterprise_x
