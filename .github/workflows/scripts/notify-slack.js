@@ -20,9 +20,10 @@
 //   ESCALATION_REASON short reason string (escalated mode).
 //   RUN_URL          workflow run URL (escalated mode; link for the human).
 //   REPORT_FILE      resolution report appended in escalated mode, if present.
-//   ALERT_CHANNEL    Slack channel id; in escalated mode the same message is
-//                    also posted here, so a failed pick is never invisible even
-//                    when the author is unmapped or unknown.
+//   ALERT_CHANNEL    Slack channel id; on any non-success outcome (escalation,
+//                    failure, noop) the same message is also posted here, so a
+//                    non-picked outcome is never invisible even when the author
+//                    is unmapped or unknown. The plain picked success only DMs.
 //   TARGET_LABEL     Human label for the target (e.g. "Enterprise").
 //   TARGET_BRANCH    Target branch (e.g. "master").
 

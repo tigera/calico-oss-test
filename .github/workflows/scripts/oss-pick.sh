@@ -5,6 +5,8 @@
 #
 #   pick    (Job A, READ token) clone, cherry-pick -x, leave conflicts for Claude.
 #           Emits outcome=clean|conflict|empty|already.
+#   finalize (Job A, no token)  after the agent: stage the pick's paths and
+#           complete the cherry-pick, or emit finalize=escalate + reason.
 #   export  (Job A, no token)   git format-patch the resolved tree (+ report) into
 #           EXPORT_DIR. Emits export=ready|noop.
 #   apply   (Job B, WRITE token, fresh runner) fresh-clone, git am the patch,
@@ -16,6 +18,8 @@
 # apply     : EXPORT_DIR EXTRA_LABELS TITLE_PREFIX OUTCOME CONFLICT_SEVERITY
 # Optional  : SOURCE_REF(=master) BRANCH_NAME WORKDIR(=PWD) CARRY_SOURCE_LABELS(=true)
 #             PICK_PATHS_FILE(=$RUNNER_TEMP/pick-paths, outside the agent's reach)
+#             PICK_CONFLICTS_FILE(=$RUNNER_TEMP/pick-conflicts) ESCALATION_NOTES
+#             PICK_CONTEXT_DIR(=/tmp/pick-context) PICK_DELETE_FILE(=/tmp/pick-delete)
 set -o errexit -o nounset -o pipefail
 
 : "${SOURCE_REPO:?}" "${TARGET_REPO:?}" "${TARGET_BRANCH:?}"
@@ -27,6 +31,9 @@ WORKDIR="${WORKDIR:-$PWD}"
 EXPORT_DIR="${EXPORT_DIR:-/tmp/pick-export}"
 TITLE_PREFIX="${TITLE_PREFIX-__DERIVE__}"
 PICK_PATHS_FILE="${PICK_PATHS_FILE:-${RUNNER_TEMP:-/tmp}/pick-paths}"
+PICK_CONFLICTS_FILE="${PICK_CONFLICTS_FILE:-${RUNNER_TEMP:-/tmp}/pick-conflicts}"
+PICK_CONTEXT_DIR="${PICK_CONTEXT_DIR:-/tmp/pick-context}"
+PICK_DELETE_FILE="${PICK_DELETE_FILE:-/tmp/pick-delete}"
 
 src_org="${SOURCE_REPO%%/*}"; src_name="${SOURCE_REPO##*/}"
 
@@ -88,11 +95,14 @@ do_pick() {
   if [ "$rc" -eq 0 ]; then
     echo "Clean cherry-pick."; record_pick_paths HEAD~1 HEAD; emit "outcome=clean"
   elif git diff --name-only --diff-filter=U | grep -q .; then
-    echo "Conflicts:"; git diff --name-only --diff-filter=U
-    record_pick_paths HEAD; emit "outcome=conflict"
-  else
+    echo "Conflicts:"; git diff --name-only --diff-filter=U | tee "$PICK_CONFLICTS_FILE"
+    record_pick_paths HEAD; write_pick_context; emit "outcome=conflict"
+  elif git rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null && git diff --cached --quiet; then
     echo "Cherry-pick empty (already present / superseded)."
     git cherry-pick --abort || true; emit "outcome=empty"
+  else
+    echo "::error::cherry-pick of ${MERGE_SHA} failed (rc=${rc}) without conflicts"
+    return 1
   fi
 }
 
@@ -105,6 +115,94 @@ do_pick() {
 record_pick_paths() {
   { git diff --name-only "$@"; git diff --name-only "${MERGE_SHA}^1" "$MERGE_SHA"; } |
     sort -u > "$PICK_PATHS_FILE"
+}
+
+# The agent may not run git with arguments (--output writes any file), so
+# it reads what it needs from these files.
+write_pick_context() {
+  local d="$PICK_CONTEXT_DIR" f s
+  rm -rf "$d"; mkdir -p "$d/files"
+  cp "$PICK_CONFLICTS_FILE" "$d/conflicts.txt"
+  { git show --no-patch --format=fuller "$MERGE_SHA"; git diff "${MERGE_SHA}^1" "$MERGE_SHA"; } > "$d/oss-commit.patch"
+  while IFS= read -r f; do
+    mkdir -p "$d/files/$(dirname "$f")"
+    # A delete/modify conflict lacks a stage; skip it.
+    for s in 1:base 2:ours 3:theirs; do
+      git show ":${s%%:*}:$f" > "$d/files/$f.${s#*:}" 2>/dev/null || rm -f "$d/files/$f.${s#*:}"
+    done
+    { echo "## $f"; git log --oneline -20 HEAD -- "$f"; echo; } >> "$d/enterprise-history.txt"
+  done < "$PICK_CONFLICTS_FILE"
+}
+
+# Runs after the agent. Anything the agent changed outside the pick's own paths
+# means an unexpected resolution, so a human reviews it instead of a PR opening.
+do_finalize() {
+  cd "$WORKDIR"
+  local extra
+  # The agent has no git command that ends the pick.
+  if [ ! -e .git/CHERRY_PICK_HEAD ]; then
+    echo "::error::no cherry-pick in progress after the agent"; exit 1
+  fi
+  apply_pick_deletions || return 0
+
+  local conflicted=() f rc=0
+  while IFS= read -r f; do [ -e "$f" ] && conflicted+=("$f"); done < "$PICK_CONFLICTS_FILE"
+  if [ "${#conflicted[@]}" -gt 0 ]; then
+    git grep -qE '^(<<<<<<<|>>>>>>>)( |$)' -- "${conflicted[@]}" || rc=$?
+    case "$rc" in
+      0) finalize_escalate "conflict markers remain after the agent"; return 0 ;;
+      1) ;;
+      *) echo "::error::marker check failed (git grep exit $rc)"; exit 1 ;;
+    esac
+  fi
+
+  extra="$( { git diff --name-only HEAD; git ls-files --others --exclude-standard; } |
+    sort -u | comm -23 - "$PICK_PATHS_FILE")"
+  if [ -n "$extra" ]; then
+    finalize_escalate "the resolution changed files outside the pick" "$extra"
+    return 0
+  fi
+
+  # Paths Enterprise lacks and the resolution did not create match nothing.
+  local stage=()
+  while IFS= read -r f; do
+    if [ -e "$f" ] || git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then stage+=("$f"); fi
+  done < "$PICK_PATHS_FILE"
+  [ "${#stage[@]}" -eq 0 ] || git add -A -- "${stage[@]}"
+  if git diff --cached --quiet HEAD; then
+    finalize_escalate "the conflict resolved to no change: check whether the OSS change is superseded in Enterprise or was dropped"
+    return 0
+  fi
+  if ! GIT_EDITOR=true git cherry-pick --continue; then
+    finalize_escalate "could not complete the cherry-pick"
+    return 0
+  fi
+  emit "finalize=done"
+}
+
+# Write cannot delete, so the agent lists files to delete; only pick paths qualify.
+apply_pick_deletions() {
+  [ -s "$PICK_DELETE_FILE" ] || return 0
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if ! grep -Fxq -- "$f" "$PICK_PATHS_FILE"; then
+      finalize_escalate "the resolution asked to delete a file outside the pick" "$f"
+      return 1
+    fi
+    rm -f -- "$f"
+  done < "$PICK_DELETE_FILE"
+}
+
+# The run page is public, so file names go only into the notes, which ship
+# encrypted with the report.
+finalize_escalate() {
+  echo "::warning::escalating: $1"
+  emit "finalize=escalate"
+  emit "reason=$1"
+  if [ -n "${2:-}" ] && [ -n "${ESCALATION_NOTES:-}" ]; then
+    { echo; echo "## Files changed outside the pick"; printf '%s\n' "$2" | sed 's/^/- /'; } >> "$ESCALATION_NOTES"
+  fi
 }
 
 do_export() {
@@ -120,6 +218,10 @@ do_export() {
   # No NET change over the base means the OSS change was fully superseded once
   # resolved: a legitimate "nothing to pick", not an error.
   if git diff --quiet "origin/${TARGET_BRANCH}" HEAD 2>/dev/null; then
+    # A conflict proves Enterprise differs, so no change here means a dropped resolution.
+    if [ "${OUTCOME:-}" = "conflict" ]; then
+      echo "::error::conflict pick has no net change; refusing to report nothing to pick"; exit 1
+    fi
     echo "::notice::resolution produced no net change over origin/${TARGET_BRANCH}; nothing to pick"
     emit "export=noop"; return 0
   fi
@@ -286,7 +388,7 @@ do_apply() {
   git config --global user.email "oss-pick-bot@users.noreply.github.com"
 
   # Idempotency + stranded-branch cleanup, now with the write token.
-  local prnum
+  local prnum stranded=""
   if git ls-remote --exit-code --heads "$tgt_url" "$BRANCH_NAME" >/dev/null 2>&1; then
     if ! prnum="$(gh pr list -R "$TARGET_REPO" --head "$BRANCH_NAME" --state all --json number --jq '.[0].number // empty')"; then
       echo "::error::cannot list PRs for ${BRANCH_NAME} on ${TARGET_REPO}; refusing to touch the branch"; exit 1
@@ -294,11 +396,11 @@ do_apply() {
     if [ -n "$prnum" ]; then
       echo "Branch $BRANCH_NAME already has PR #${prnum}; nothing to do."; emit "pr_url="; return 0
     fi
-    echo "::warning::Branch $BRANCH_NAME exists with no PR (stranded); deleting."
-    git push "$tgt_url" --delete "$BRANCH_NAME" || true
+    echo "::warning::Branch $BRANCH_NAME exists with no PR (stranded); overwriting it."
+    stranded=1
   fi
 
-  git clone "$tgt_url" .
+  git clone --depth=1 --branch "$TARGET_BRANCH" "$tgt_url" .
   git checkout -b "$BRANCH_NAME" "origin/${TARGET_BRANCH}"
   # Apply the resolved commit. If the base moved and it no longer applies, fail
   # loudly rather than pushing a broken tree.
@@ -309,7 +411,9 @@ do_apply() {
 
   build_pr_text
 
-  git push "$tgt_url" "HEAD:${BRANCH_NAME}"
+  # A stranded branch has no PR, so only this bot uses it.
+  git push ${stranded:+--force} "$tgt_url" "HEAD:${BRANCH_NAME}"
+  emit "pushed=$BRANCH_NAME"
 
   local IFS=','; local l
   for l in $PR_LABELS_OUT; do
@@ -333,8 +437,9 @@ do_apply() {
 }
 
 case "${1:-}" in
-  pick)   do_pick ;;
-  export) do_export ;;
-  apply)  do_apply ;;
-  *) echo "usage: $0 {pick|export|apply}" >&2; exit 2 ;;
+  pick)     do_pick ;;
+  finalize) do_finalize ;;
+  export)   do_export ;;
+  apply)    do_apply ;;
+  *) echo "usage: $0 {pick|finalize|export|apply}" >&2; exit 2 ;;
 esac
