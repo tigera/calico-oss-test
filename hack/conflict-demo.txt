@@ -1,5 +1,2 @@
-# Cherry-pick conflict demo
-component: shared
-timeout_seconds: 999
-mode: enterprise
-extra_enterprise_feature: enabled
+# auto-pick conflict fixture
+features: a,b
