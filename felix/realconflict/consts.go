@@ -2,5 +2,5 @@
 package realconflict
 
 const (
-	DefaultTimeout = 30
+	DefaultTimeout = 60 // OSS: raised
 )
