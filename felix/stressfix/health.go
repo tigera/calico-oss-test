@@ -14,7 +14,7 @@ type HealthController struct {
 
 // NewHealthController builds a health controller with the enabled feature set.
 func NewHealthController() (*HealthController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_health"}
 	c := &HealthController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }

@@ -14,7 +14,7 @@ type ConntrackController struct {
 
 // NewConntrackController builds a conntrack controller with the enabled feature set.
 func NewConntrackController() (*ConntrackController, []string) {
-	features := []string{"core", "base"}
+	features := []string{"core", "base", "metric_conntrack"}
 	c := &ConntrackController{Timeout: 30 * time.Second, MaxRetries: 3}
 	return c, features
 }
