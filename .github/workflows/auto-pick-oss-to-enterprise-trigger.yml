@@ -14,5 +14,7 @@ permissions: {}
 jobs:
   trigger:
     runs-on: ubuntu-latest
+    env:
+      HEAD_SHA: ${{ github.sha }}
     steps:
-      - run: echo "master advanced to ${{ github.sha }}; stage-2 runs via workflow_run"
+      - run: echo "master advanced to ${HEAD_SHA}; stage-2 runs via workflow_run"
