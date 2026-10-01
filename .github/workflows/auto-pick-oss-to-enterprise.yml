@@ -113,38 +113,18 @@ jobs:
           done
           chmod +x "$RUNNER_TEMP/oss-pick.sh"
 
-      # 0a. The merge commit to pick: the pushed commit for the automatic flow,
-      #     or the input PR's merge commit for a manual dispatch. The input PR
-      #     must already be merged (a manual pick of an open PR is nonsense).
-      - name: Determine merge SHA
-        id: mergesha
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_PR: ${{ github.event.inputs.pr }}
-          PUSH_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            j="$(gh api "repos/${SOURCE_REPO}/pulls/${DISPATCH_PR}")"
-            sha="$(echo "$j" | jq -r '.merge_commit_sha // empty')"
-            if [ "$(echo "$j" | jq -r '.merged')" != "true" ] || [ -z "$sha" ]; then
-              echo "::error::OSS PR #${DISPATCH_PR} is not merged (or has no merge commit); nothing to pick"; exit 1
-            fi
-            echo "Manual dispatch: PR #${DISPATCH_PR} -> merge ${sha}"
-            echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          else
-            echo "sha=$PUSH_SHA" >> "$GITHUB_OUTPUT"
-          fi
-
-      # 0b. Find the PR whose merge commit is that SHA (a push has no PR
-      #    payload). resolve-merged-pr.js retries once for API lag, confirms the
-      #    PR merged to master, and writes the outputs
-      #    proceed/pr/sha/login/merger/trusted. trusted = author is a tigera
-      #    org member; only then may the agent read the author's text.
+      # 0. Resolve the PR to pick. The automatic flow passes the pushed MERGE_SHA
+      #    (a push has no PR payload) and resolve-merged-pr.js finds the PR from
+      #    it; a manual dispatch passes PR_NUMBER directly. Exactly one is set
+      #    (the other event's field is empty). It then confirms the PR merged to
+      #    master and writes proceed/pr/sha/login/merger/trusted. trusted =
+      #    author is a tigera org member; only then may the agent read the
+      #    author's text.
       - name: Resolve merged PR
         id: resolve
         env:
-          MERGE_SHA: ${{ steps.mergesha.outputs.sha }}
+          MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ github.event.inputs.pr }}
           BASE_REF: ${{ env.SOURCE_REF }}
           MEMBER_ORG: tigera
           MEMBER_TOKEN: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
