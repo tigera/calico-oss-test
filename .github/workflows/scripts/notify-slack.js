@@ -19,10 +19,12 @@
 //   MODE             'picked' (default) | 'escalated'.
 //   ESCALATION_REASON short reason string (escalated mode).
 //   RUN_URL          workflow run URL (escalated mode; link for the human).
-//   REPORT_FILE      resolution report appended in escalated mode, if present.
+//   REPORT_FILE      resolution report (escalated mode). Appended to the author
+//                    DM only, never to ALERT_CHANNEL -- the channel stays short.
 //   ALERT_CHANNEL    Slack channel id; an escalation or failure is also posted
-//                    here, so an error is never invisible even when the author
-//                    is unmapped or unknown. A noop or picked success only DMs.
+//                    here (reason + run link, without the report), so an error
+//                    is never invisible even when the author is unmapped or
+//                    unknown. A noop or picked success only DMs.
 //   TARGET_LABEL     Human label for the target (e.g. "Enterprise").
 //   TARGET_BRANCH    Target branch (e.g. "master").
 
@@ -100,6 +102,10 @@ async function main() {
   // Line 1 carries no icon; the result icon sits on the status line below,
   // next to the resolution text.
   let text;
+  // Appended to the author DM only, never to the alert channel: the resolution
+  // report can be long and names Enterprise internals, so the channel stays a
+  // short reason + run link while the author gets the full detail privately.
+  let dmExtra = '';
   if (env.MODE === 'escalated') {
     const reason = (env.ESCALATION_REASON || 'needs manual resolution').replace(/[<>|*]/g, '').trim();
     const lines = [
@@ -108,9 +114,9 @@ async function main() {
       `*Reason:*  ${reason}.`,
     ];
     if (env.RUN_URL) lines.push(`<${env.RUN_URL}|See the run>.`);
-    const report = readReport(env.REPORT_FILE);
-    if (report) lines.push('*Resolution report:*', '```', report, '```');
     text = lines.join('\n');
+    const report = readReport(env.REPORT_FILE);
+    if (report) dmExtra = `\n*Resolution report:*\n\`\`\`\n${report}\n\`\`\``;
   } else if (env.MODE === 'noop') {
     const lines = [
       `#${env.SRC_PR} ${osTag}${titlePart}`,
@@ -134,7 +140,7 @@ async function main() {
     text = lines.join('\n');
   }
 
-  async function post(channel, kind) {
+  async function post(channel, body, kind) {
     try {
       const resp = await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',
@@ -142,7 +148,7 @@ async function main() {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json; charset=utf-8',
         },
-        body: JSON.stringify({ channel, text, unfurl_links: false }),
+        body: JSON.stringify({ channel, text: body, unfurl_links: false }),
         signal: AbortSignal.timeout(30000),
       });
       const data = await resp.json();
@@ -153,8 +159,10 @@ async function main() {
     }
   }
 
-  if (slackId) await post(slackId, `DM to ${author}`);
-  if (alertChannel) await post(alertChannel, 'channel alert');
+  // The author gets the full report (dmExtra); the alert channel gets the short
+  // version only.
+  if (slackId) await post(slackId, text + dmExtra, `DM to ${author}`);
+  if (alertChannel) await post(alertChannel, text, 'channel alert');
 }
 
 main().catch((err) => {
