@@ -379,7 +379,7 @@ jobs:
           (steps.pick.outputs.outcome == 'clean' ||
            steps.pick.outputs.outcome == 'conflict')
         env:
-          GENERATE_TOKEN: ${{ secrets.PROBE_GIT_PAT }}
+          GENERATE_TOKEN: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr }}
           MERGE_SHA: ${{ steps.resolve.outputs.sha }}
         run: bash "$RUNNER_TEMP/oss-pick.sh" generate
