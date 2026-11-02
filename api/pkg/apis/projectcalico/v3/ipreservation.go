@@ -65,6 +65,12 @@ type IPReservationSpec struct {
 	// +optional
 	// +listType=set
 	ExcludedHandles []string `json:"excludedHandles,omitempty"`
+
+	// AllowedHandles is an optional list of IPAM handles permitted to use this
+	// reservation.
+	// +optional
+	// +listType=set
+	AllowedHandles []string `json:"allowedHandles,omitempty"`
 }
 
 // NewIPReservation creates a new (zeroed) IPReservation struct with the TypeMetadata initialised to the current
