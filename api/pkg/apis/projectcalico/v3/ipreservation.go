@@ -76,6 +76,11 @@ type IPReservationSpec struct {
 	// +optional
 	// +listType=set
 	RetiredHandles []string `json:"retiredHandles,omitempty"`
+
+	// PendingHandles is an optional list of IPAM handles awaiting assignment.
+	// +optional
+	// +listType=set
+	PendingHandles []string `json:"pendingHandles,omitempty"`
 }
 
 // NewIPReservation creates a new (zeroed) IPReservation struct with the TypeMetadata initialised to the current
