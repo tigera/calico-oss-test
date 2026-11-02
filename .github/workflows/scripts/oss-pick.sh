@@ -539,11 +539,17 @@ do_generate() {
   if git diff --quiet HEAD && [ -z "$(git ls-files --others --exclude-standard)" ]; then
     echo "generate: regeneration produced no change"; emit "generate=noop"; return 0
   fi
-  git add -A
+  # Exactly what the generators changed vs the finalized pick: modified/deleted
+  # tracked files plus new untracked ones (.gitignore keeps build artifacts out).
+  local gen_paths=() f
+  while IFS= read -r f; do [ -n "$f" ] && gen_paths+=("$f"); done < <(
+    { git diff --name-only HEAD; git ls-files --others --exclude-standard; } | sort -u)
+  git add -- "${gen_paths[@]}"
   git commit -q --amend --no-edit
-  # export wants exactly one commit whose paths are all in PICK_PATHS_FILE. The
-  # regen stays inside the pick commit, so record the commit's full path set.
-  git diff --name-only "origin/${TARGET_BRANCH}..HEAD" | sort -u > "$PICK_PATHS_FILE"
+  # export rejects any committed path not in PICK_PATHS_FILE. Extend the allowlist
+  # with just the generated paths, unioned with the pick's own, so the guard still
+  # fires on a path neither the pick nor the generators produced.
+  { printf '%s\n' "${gen_paths[@]}"; cat "$PICK_PATHS_FILE"; } | sort -u -o "$PICK_PATHS_FILE"
   echo "generate: amended the pick with regenerated files"
   emit "generate=done"
 }
