@@ -23,18 +23,19 @@ package k8stests
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	. "github.com/onsi/gomega"
 	v3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
-	operatorv1 "github.com/tigera/operator/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	e2eutils "github.com/projectcalico/calico/e2e/pkg/utils"
 	"github.com/projectcalico/calico/node/tests/k8st/utils"
+	operatorv1 "github.com/projectcalico/calico/operator/api/v1"
 )
 
 const (
@@ -71,6 +72,7 @@ func TestSpoof(t *testing.T) {
 	// Namespace + pods, created once for both scenarios.
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
 	g.Expect(cli.Create(ctx, ns)).To(Succeed(), "creating namespace")
+	utils.WaitForDefaultServiceAccount(t, nsName)
 	t.Cleanup(func() { _ = cli.Delete(context.Background(), ns) })
 
 	// Restore the cluster to IPIP encapsulation when the whole test is done,
@@ -154,7 +156,7 @@ func runSpoofScenario(t *testing.T, cli ctrlclient.Client, ctx context.Context, 
 		sendScapy(t, nsName, fmt.Sprintf(
 			"send(IP(dst='%s')/UDP(dport=5000, sport=5000)/Raw(load='%s'))", remotePodIP, normalMsg))
 		return grepSnoop(t, nsName, normalMsg)
-	}, "60s", "2s").Should(Succeed(), "normal %s packet was never delivered", encap)
+	}, "60s", "1s").Should(Succeed(), "normal %s packet was never delivered", encap)
 
 	// A spoofed (encapsulated) packet must NOT be delivered: we keep forging it
 	// and require that the grep for its payload keeps failing.
@@ -166,7 +168,7 @@ func runSpoofScenario(t *testing.T, cli ctrlclient.Client, ctx context.Context, 
 			return fmt.Errorf("ERROR - succeeded in sending spoofed %s packet", encap)
 		}
 		return nil
-	}, "60s", "2s").Should(Succeed(), "spoofed %s packet was delivered — anti-spoofing failed", encap)
+	}, "60s", "1s").Should(Succeed(), "spoofed %s packet was delivered — anti-spoofing failed", encap)
 }
 
 // sendScapy feeds a single scapy send() statement to the scapy pod on stdin.
@@ -191,13 +193,12 @@ func grepSnoop(t *testing.T, nsName, message string) error {
 // previous delivery can't mask the next test via an established flow.
 func clearConntrack(t *testing.T, ctx context.Context) {
 	t.Helper()
+	g := NewWithT(t)
 	cs := utils.K8sClient(t)
 	pods, err := cs.CoreV1().Pods("calico-system").List(ctx, metav1.ListOptions{
 		LabelSelector: "k8s-app=calico-node",
 	})
-	if err != nil {
-		t.Fatalf("listing calico-node pods: %v", err)
-	}
+	g.Expect(err).NotTo(HaveOccurred(), "listing calico-node pods")
 	for _, p := range pods.Items {
 		utils.MustExecInCalicoNode(t, p.Spec.NodeName, "conntrack -F")
 	}
@@ -257,51 +258,48 @@ func setEncapsulation(t *testing.T, g *WithT, cli ctrlclient.Client, ctx context
 				p.Spec.IPIPMode, p.Spec.VXLANMode)
 		}
 		return nil
-	}, "60s", "2s").Should(Succeed(), "operator did not reconcile %s to %s", defaultV4Pool, encap)
+	}, "60s", "1s").Should(Succeed(), "operator did not reconcile %s to %s", defaultV4Pool, encap)
 
-	// Restart calico-node to cleanly apply the new encapsulation.
-	cs := utils.K8sClient(t)
-	g.Expect(cs.CoreV1().Pods("calico-system").DeleteCollection(ctx, metav1.DeleteOptions{},
-		metav1.ListOptions{LabelSelector: "k8s-app=calico-node"})).
-		To(Succeed(), "deleting calico-node pods")
-	waitForCalicoNodeRestart(t, ctx)
+	// Felix applies the new encapsulation without a restart, so wait for the tunnel
+	// device rather than restarting calico-node. Restarting left the following tests
+	// running against a Felix that had only just started.
+	waitForTunnelIface(t, ctx, map[string]string{"IPIP": "tunl0", "VXLAN": "vxlan.calico"}[encap])
 }
 
-// waitForCalicoNodeRestart blocks until every calico-node pod is freshly
-// running and Ready, with none still terminating. This is stricter than a bare
-// readiness wait: right after DeleteCollection the old pods may still report
-// Ready, so we additionally require no pod carries a deletion timestamp.
-func waitForCalicoNodeRestart(t *testing.T, ctx context.Context) {
+// waitForTunnelIface blocks until iface has an address on every worker node, which
+// is what tells us Felix has finished programming the new encapsulation.
+func waitForTunnelIface(t *testing.T, ctx context.Context, iface string) {
 	t.Helper()
+	g := NewWithT(t)
 
 	cs := utils.K8sClient(t)
-	err := utils.RetryUntilSuccess(t, 2*time.Minute, func() error {
-		pods, err := cs.CoreV1().Pods("calico-system").List(ctx, metav1.ListOptions{
-			LabelSelector: "k8s-app=calico-node",
-		})
-		if err != nil {
-			return err
-		}
-		if len(pods.Items) == 0 {
-			return fmt.Errorf("no calico-node pods yet")
-		}
-		for _, p := range pods.Items {
-			if p.DeletionTimestamp != nil {
-				return fmt.Errorf("calico-node pod %s is still terminating", p.Name)
+	nodes, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	g.Expect(err).NotTo(HaveOccurred(), "listing nodes")
+
+	g.Eventually(func() error {
+		for _, n := range nodes.Items {
+			if strings.Contains(n.Name, "control-plane") {
+				continue
 			}
-			ready := false
-			for _, c := range p.Status.Conditions {
-				if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-					ready = true
-				}
+			// ip exits non-zero when the device does not exist yet.
+			out, err := utils.Run(t, "docker exec "+n.Name+" ip -brief addr show "+iface,
+				utils.RunOptions{AllowFail: true, SuppressErrLog: true})
+			if err != nil {
+				return fmt.Errorf("%s on %s: %w", iface, n.Name, err)
 			}
-			if !ready {
-				return fmt.Errorf("calico-node pod %s is not ready", p.Name)
+			// ip -brief output: "<iface> <state> <addrs...>", e.g.
+			// "vxlan.calico UNKNOWN 10.244.0.1/32".
+			fields := strings.Fields(out)
+			if len(fields) < 3 {
+				return fmt.Errorf("%s on %s has no address yet: %s", iface, n.Name, strings.TrimSpace(out))
+			}
+
+			// Felix assigns the address before bringing the link up, so an
+			// address alone doesn't mean the device can carry traffic.
+			if fields[1] == "DOWN" {
+				return fmt.Errorf("%s on %s is DOWN: %s", iface, n.Name, strings.TrimSpace(out))
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("calico-node pods did not restart cleanly: %v", err)
-	}
+	}, 2*time.Minute, time.Second).Should(Succeed(), "%s did not come up on all workers", iface)
 }

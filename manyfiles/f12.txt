@@ -1,4 +1,0 @@
-# file 12
-setting = oss-value-12 (UPDATED upstream)
-shared_line = keep-me
-new_feature = enabled

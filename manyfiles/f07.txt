@@ -1,4 +1,0 @@
-# file 07
-setting = oss-value-07 (UPDATED upstream)
-shared_line = keep-me
-new_feature = enabled

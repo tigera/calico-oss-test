@@ -5,11 +5,9 @@
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/6064/badge)](https://bestpractices.coreinfrastructure.org/projects/6064)
 
 <div align=center>
-<h1>Calico Open Source</h1>
-<p align="center">Cloud-native networking and security everywhere your workloads run</p>
-<p align="center"><b>Star us on GitHub to follow the project!</b></p>
+<h1>Calico</h1>
 <h2>
-<a href="https://projectcalico.docs.tigera.io/getting-started/kubernetes/quickstart">Quick Start Guide</a> |
+<a href="https://projectcalico.docs.tigera.io/getting-started/kubernetes/quickstart">Quickstart</a> |
 <a href="https://projectcalico.docs.tigera.io">Docs</a> |
 <a href="CONTRIBUTING.md">Contribute</a> |
 <a href="https://slack.projectcalico.org">Slack</a> |
@@ -28,14 +26,9 @@ Project Calico, created and maintained by [Tigera][tigera], is an open-source pr
 - **Optimized Performance**: Engineered for high speed and low CPU usage, maximizing your cluster investments.
 - **Scalable Architecture**: Grows seamlessly with your Kubernetes clusters without sacrificing performance.
 - **Advanced Security**: Get granular access controls and WireGuard encryption.
-- **Two-job split test**: validating the fresh-runner push path.
-- **Squash line A**: MODIFIED text.
-- **Squash line B**: second line.
-- **Merge-commit test**: exercising the two-parent cherry-pick path (with -m 1).
 - **Kubernetes Networking Policy Support**: Continually defining excellence in Kubernetes network policy standards and support.
 - **Vibrant Contributor Community**: Over 200 contributors from a wide array of global companies.
 - **Flexible networking**: An array of networking tools at your disposal, including BGP, VXLAN, service advertisement, and more.
-- **Observability**: Flow logs and visualizations to understand traffic across your cluster.
 
 <div align=center>
 <img src="https://www.tigera.io/app/uploads/2026/01/Ecosystem_2026.svg">
@@ -81,7 +74,7 @@ Project Calico, created and maintained by [Tigera][tigera], is an open-source pr
 [resources]: https://docs.tigera.io/calico/latest/about/training-resources
 [issues]: https://github.com/projectcalico/calico/issues
 [api]: https://github.com/projectcalico/api
-[operator]: https://github.com/tigera/operator
+[operator]: https://github.com/projectcalico/calico/tree/master/operator
 [vpp]: https://github.com/projectcalico/vpp-dataplane
 [news]: https://www.tigera.io/project-calico/#:~:text=Join%20Calico%20Open%20Source%20community%20newsletter
 [youtube]: https://www.youtube.com/channel/UCFpTnXDNcBoXI4gqCDmegFA

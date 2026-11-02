@@ -20,7 +20,6 @@ package utils
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,10 +28,13 @@ import (
 	"testing"
 	"time"
 
+	//nolint:staticcheck // Ignore ST1001: should not use dot imports
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -160,59 +162,6 @@ func mergeRunOptions(opts []RunOptions) RunOptions {
 		return RunOptions{}
 	}
 	return opts[0]
-}
-
-// ----------------------------------------------------------------------------
-// Retry.
-
-// RetryUntilSuccess invokes fn until it returns nil or the timeout
-// elapses. It uses exponential backoff starting at 0.5s and capped at 10s.
-// The time taken by fn counts toward the wall-clock deadline
-// so the overall budget is predictable.
-//
-// Returns the last error from fn on timeout, or nil on success.
-func RetryUntilSuccess(t testing.TB, timeout time.Duration, fn func() error) error {
-	t.Helper()
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
-	start := time.Now()
-	deadline := start.Add(timeout)
-	backoff := 500 * time.Millisecond
-	const maxBackoff = 10 * time.Second
-	attempts := 0
-
-	var lastErr error
-	for {
-		attempts++
-		err := fn()
-		if err == nil {
-			elapsed := time.Since(start)
-			if elapsed > timeout/2 {
-				t.Logf("retry succeeded but used %s of %s budget (%d attempts)", elapsed, timeout, attempts)
-			}
-			return nil
-		}
-		lastErr = err
-		now := time.Now()
-		if !now.Before(deadline) {
-			return fmt.Errorf("retry did not succeed within %s (%d attempts): %w", timeout, attempts, lastErr)
-		}
-		remaining := deadline.Sub(now)
-		sleep := backoff
-		if sleep > remaining {
-			sleep = remaining
-		}
-		if sleep > maxBackoff {
-			sleep = maxBackoff
-		}
-		t.Logf("retry attempt %d hit error, sleeping %s (%s remaining): %v", attempts, sleep, remaining, err)
-		time.Sleep(sleep)
-		backoff = time.Duration(float64(backoff) * 1.5)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
 }
 
 // ----------------------------------------------------------------------------
@@ -476,28 +425,22 @@ func streamInPod(t testing.TB, pod *corev1.Pod, command []string, stdin string, 
 // ----------------------------------------------------------------------------
 // Diags.
 
-// CollectDiagsOnFailure registers a t.Cleanup that prints diagnostics if the
-// test (or any of its parents) failed. It mirrors utils.py:DiagsCollector,
-// which is used as a context manager around test bodies.
-//
-// Usage:
+// CollectDiagsOnFailure returns a func that prints diagnostics if the test has
+// failed. Defer it from the test body, not a setup helper: a defer runs before
+// any t.Cleanup, so the dump sees the state that explains the failure.
+// It mirrors utils.py:DiagsCollector, which wraps test bodies.
 //
 //	func TestSomething(t *testing.T) {
 //	    defer utils.CollectDiagsOnFailure(t)()
 //	    ...
 //	}
-//
-// The returned func is intentionally a no-op so it can be used with defer
-// or ignored; the actual diag dump runs from t.Cleanup.
 func CollectDiagsOnFailure(t testing.TB) func() {
 	t.Helper()
-	t.Cleanup(func() {
-		if !t.Failed() {
-			return
+	return func() {
+		if t.Failed() {
+			dumpDiags(t)
 		}
-		dumpDiags(t)
-	})
-	return func() {}
+	}
 }
 
 func dumpDiags(t testing.TB) {
@@ -631,24 +574,62 @@ func logCalicoNodeLogs(t testing.TB) {
 // ----------------------------------------------------------------------------
 // Pod-status assertions.
 
-// CheckPodStatus fails the test if any pod in the namespace is not in the Running phase.
+// CheckPodStatus waits for every pod in the namespace to be Running and Ready,
+// and fails the test if they don't settle.
+//
+// Ready matters as much as Running: a calico-node pod reports Running as soon as
+// its container starts, minutes before Felix has finished its first sync. Tests
+// that run after this one assume a settled dataplane.
 func CheckPodStatus(t testing.TB, namespace string) {
 	t.Helper()
 	cs := K8sClient(t)
-	pods, err := cs.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
-	if err != nil {
-		t.Fatalf("listing pods in %s: %v", namespace, err)
+
+	var last []corev1.Pod
+	err := wait.PollUntilContextTimeout(context.Background(), time.Second, podSettleTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			pods, err := cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				// Keep polling through apiserver blips rather than reporting a
+				// stuck rollout with no pods collected to log.
+				t.Logf("listing pods in %s: %v", namespace, err)
+				return false, nil
+			}
+			last = pods.Items
+			for _, p := range pods.Items {
+				if p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning || !podReady(&p) {
+					return false, nil
+				}
+			}
+			return true, nil
+		})
+
+	for i := range last {
+		t.Logf("%s\t%s\t%s\tready=%v", last[i].Name, last[i].Namespace, last[i].Status.Phase, podReady(&last[i]))
 	}
-	for _, p := range pods.Items {
-		t.Logf("%s\t%s\t%s", p.Name, p.Namespace, p.Status.Phase)
-		if p.Status.Phase != corev1.PodRunning {
+	if err == nil {
+		return
+	}
+	for i := range last {
+		p := &last[i]
+		if p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning || !podReady(p) {
 			// Surface conditions, container statuses and events to help
 			// debug (the client-go replacement for `kubectl describe po`).
-			logPodDebug(t, &p)
-			t.Fatalf("pod %s/%s is in phase %s, expected Running",
-				p.Namespace, p.Name, p.Status.Phase)
+			logPodDebug(t, p)
 		}
 	}
+	t.Fatalf("pods in %s did not become Running and Ready within %s: %v", namespace, podSettleTimeout, err)
+}
+
+// podSettleTimeout covers a calico-node rollout, which several tests trigger.
+const podSettleTimeout = 3 * time.Minute
+
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // logPodDebug logs the pod's conditions, container statuses and events.
@@ -706,7 +687,7 @@ func PodNames(t testing.TB, namespace, labelSelector, fieldSelector string) ([]s
 func WaitForPodsReady(t testing.TB, namespace, labelSelector string, timeout time.Duration) {
 	t.Helper()
 	cs := K8sClient(t)
-	err := RetryUntilSuccess(t, timeout, func() error {
+	NewWithT(t).Eventually(func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
@@ -720,15 +701,12 @@ func WaitForPodsReady(t testing.TB, namespace, labelSelector string, timeout tim
 			return fmt.Errorf("no pods found in namespace %s", namespace)
 		}
 		for _, p := range pods.Items {
-			if !podIsReady(&p) {
+			if !podReady(&p) {
 				return fmt.Errorf("pod %s/%s is not ready", p.Namespace, p.Name)
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("pods in %s did not become ready within %s: %v", namespace, timeout, err)
-	}
+	}, timeout, time.Second).Should(Succeed(), "pods in %s did not become ready within %s", namespace, timeout)
 }
 
 // WaitForPodReady blocks until the named pod has a Ready condition of
@@ -736,28 +714,16 @@ func WaitForPodsReady(t testing.TB, namespace, labelSelector string, timeout tim
 func WaitForPodReady(t testing.TB, namespace, name string, timeout time.Duration) {
 	t.Helper()
 	cs := K8sClient(t)
-	err := RetryUntilSuccess(t, timeout, func() error {
+	NewWithT(t).Eventually(func() error {
 		pod, err := cs.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
-		if !podIsReady(pod) {
+		if !podReady(pod) {
 			return fmt.Errorf("pod %s/%s is not ready", namespace, name)
 		}
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("pod %s/%s did not become ready within %s: %v", namespace, name, timeout, err)
-	}
-}
-
-func podIsReady(pod *corev1.Pod) bool {
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady {
-			return c.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+	}, timeout, time.Second).Should(Succeed(), "pod %s/%s did not become ready within %s", namespace, name, timeout)
 }
 
 // DeletePodAndWait deletes the named pod and blocks until it is fully gone
@@ -772,7 +738,7 @@ func DeletePodAndWait(t testing.TB, namespace, name string, timeout time.Duratio
 	if err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("deleting pod %s/%s: %v", namespace, name, err)
 	}
-	err = RetryUntilSuccess(t, timeout, func() error {
+	NewWithT(t).Eventually(func() error {
 		_, err := cs.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -781,16 +747,5 @@ func DeletePodAndWait(t testing.TB, namespace, name string, timeout time.Duratio
 			return err
 		}
 		return fmt.Errorf("pod %s/%s still exists", namespace, name)
-	})
-	if err != nil {
-		t.Fatalf("pod %s/%s was not deleted within %s: %v", namespace, name, timeout, err)
-	}
+	}, timeout, time.Second).Should(Succeed(), "pod %s/%s was not deleted within %s", namespace, name, timeout)
 }
-
-// ----------------------------------------------------------------------------
-// Errors.
-
-// ErrTimeout is returned by RetryUntilSuccess on deadline expiry. It's a
-// convenience for callers that want to distinguish timeouts from other
-// errors; RetryUntilSuccess wraps it via fmt.Errorf.
-var ErrTimeout = errors.New("retry timeout")

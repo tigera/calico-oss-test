@@ -1,4 +1,0 @@
-# file 03
-setting = oss-value-03 (UPDATED upstream)
-shared_line = keep-me
-new_feature = enabled
