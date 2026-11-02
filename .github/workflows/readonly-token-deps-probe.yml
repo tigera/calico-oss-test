@@ -1,0 +1,45 @@
+name: readonly-token-deps-probe
+
+# Does the EXISTING read PAT (TIGERA_BOT_PAT_READONLY) already let gen-deps-files
+# resolve the enterprise private modules? If yes, no new secret is needed.
+# Prints only pass/fail; never the token. Never pushes.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Read-access check for the three private modules
+        env:
+          RO: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
+        run: |
+          for r in tigera/goStrongswanVici tigera/tds-apiserver tigera/windows-networking; do
+            if git ls-remote "https://x-access-token:${RO}@github.com/$r" HEAD >/dev/null 2>&1; then
+              echo "READ OK:   $r"
+            else
+              echo "READ FAIL: $r"
+            fi
+          done
+
+      - name: Clone enterprise-test and run gen-deps-files with the read PAT
+        env:
+          RO: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
+        run: |
+          git clone --filter=blob:none "https://x-access-token:${RO}@github.com/tigera/calico-enterprise-test.git" ent 2>&1 | tail -3 || { echo "CLONE FAIL (read token cannot read enterprise-test)"; exit 1; }
+          cd ent
+          git fetch --tags --quiet origin || true
+          export GIT_CONFIG_SSH="git config --global url.\"https://x-access-token:${RO}@github.com/\".insteadOf \"https://github.com/\";"
+          set +e
+          make gen-deps-files > /tmp/d.log 2>&1
+          rc=$?
+          set -e
+          echo "===== gen-deps-files exit code: $rc ====="
+          echo "--- tail ---"; tail -40 /tmp/d.log
+          if [ "$rc" -eq 0 ]; then
+            echo "VERDICT: TIGERA_BOT_PAT_READONLY is sufficient; NO new secret needed."
+          else
+            echo "VERDICT: read token is NOT sufficient; inspect the log above for Permission denied."
+          fi
