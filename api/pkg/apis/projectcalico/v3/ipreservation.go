@@ -59,6 +59,11 @@ type IPReservationSpec struct {
 	// +listType=set
 	// +kubebuilder:validation:items:Format=cidr
 	ReservedCIDRs []string `json:"reservedCIDRs,omitempty" validate:"cidrs,omitempty"`
+
+	// ExcludedHandles is an optional list of IPAM handles excluded from this
+	// reservation.
+	// +optional
+	ExcludedHandles []string `json:"excludedHandles,omitempty"`
 }
 
 // NewIPReservation creates a new (zeroed) IPReservation struct with the TypeMetadata initialised to the current
