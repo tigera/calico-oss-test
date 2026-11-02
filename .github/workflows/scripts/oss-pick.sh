@@ -517,13 +517,45 @@ assign_pr() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Job A: generate (read-only token). After the pick is finalized, run the
+# repo's own generators so the picked change never ships hand-merged generated
+# files. Targeted, dependency-ordered subset, run inside the pinned build image.
+# Amends the single pick commit and widens the pick-path allowlist so export
+# accepts the regenerated files. go mod reaches private modules over https with
+# the read token (not the Makefile's default SSH rewrite).
+# ---------------------------------------------------------------------------
+do_generate() {
+  cd "$WORKDIR"
+  : "${GENERATE_TOKEN:?}"
+  mask "$GENERATE_TOKEN"
+  export GIT_CONFIG_SSH="git config --global url.\"https://x-access-token:${GENERATE_TOKEN}@github.com/\".insteadOf \"https://github.com/\";"
+
+  # api codegen needs no private creds; deps files need the token. Order
+  # matches the repo's own 'generate' target (api before deps).
+  make -C api gen-files
+  make gen-deps-files
+
+  if git diff --quiet HEAD && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+    echo "generate: regeneration produced no change"; emit "generate=noop"; return 0
+  fi
+  git add -A
+  git commit -q --amend --no-edit
+  # export wants exactly one commit whose paths are all in PICK_PATHS_FILE. The
+  # regen stays inside the pick commit, so record the commit's full path set.
+  git diff --name-only "origin/${TARGET_BRANCH}..HEAD" | sort -u > "$PICK_PATHS_FILE"
+  echo "generate: amended the pick with regenerated files"
+  emit "generate=done"
+}
+
 # Sourced by the tests for its functions only.
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 
 case "${1:-}" in
   pick)     do_pick ;;
   finalize) do_finalize ;;
+  generate) do_generate ;;
   export)   do_export ;;
   apply)    do_apply ;;
-  *) echo "usage: $0 {pick|finalize|export|apply}" >&2; exit 2 ;;
+  *) echo "usage: $0 {pick|finalize|generate|export|apply}" >&2; exit 2 ;;
 esac
