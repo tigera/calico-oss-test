@@ -1,0 +1,27 @@
+name: identify-readonly-bot
+
+# Prints which account owns TIGERA_BOT_PAT_READONLY and whether it is a classic
+# or fine-grained PAT. Never prints the token itself.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Identify the read token's account and type
+        env:
+          RO: ${{ secrets.TIGERA_BOT_PAT_READONLY }}
+        run: |
+          # Token prefix tells classic (ghp_) vs fine-grained (github_pat_),
+          # printed as a label only, not the token.
+          case "$RO" in
+            ghp_*)        echo "TOKEN TYPE: classic PAT (ghp_)";;
+            github_pat_*) echo "TOKEN TYPE: fine-grained PAT (github_pat_)";;
+            *)            echo "TOKEN TYPE: other/unknown prefix";;
+          esac
+          hdr=$(curl -s -D - -o /dev/null -H "Authorization: token ${RO}" https://api.github.com/user)
+          echo "ACCOUNT LOGIN: $(curl -s -H "Authorization: token ${RO}" https://api.github.com/user | python3 -c 'import sys,json;print(json.load(sys.stdin).get("login","?"))')"
+          echo "OAUTH SCOPES HEADER (classic shows scopes; fine-grained is blank):"
+          echo "$hdr" | grep -i '^x-oauth-scopes:' || echo "  (no x-oauth-scopes header -> fine-grained or GitHub App token)"
